@@ -220,6 +220,9 @@ fn request_permissions() -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Ensure the global BT command table is populated at startup
+    crate::bt::commands::init_bt_commands();
+
     info!("Starting Rust UI application");
     tauri::Builder::default()
         .plugin(
