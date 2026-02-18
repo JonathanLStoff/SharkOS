@@ -1,5 +1,5 @@
 void handlenrftoolsmenu() {
-  const char* menuItems[] = { "analyzer", "hijack nrf device" ,"2.4 ghz jammer","jamm spes channel"};
+  const char* menuItems[] = { "analyzer", "hijack nrf device" ,"2.4 ghz disruptor","jamm spes channel"};
   const int menuLength = sizeof(menuItems) / sizeof(menuItems[0]);
   const int visibleItems = 3;
 
@@ -60,7 +60,7 @@ void handlenrftoolsmenu() {
 
   drawMenuPage(nrf::currentPage);
 
-       runLoop(nrfjammer);
+       runLoop(nrfdisruptor);
         break;
 
         case 3:

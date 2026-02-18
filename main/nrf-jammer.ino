@@ -105,7 +105,7 @@ void handleSelection(int item) {
 
 
 
-void nrfjammer() {
+void nrfdisruptor() {
   if (digitalRead(BTN_LEFT) == LOW) {
     nrf::currentPage = (nrf::currentPage - 1 + nrf::menuLength) % nrf::menuLength;
     drawMenuPage(nrf::currentPage);

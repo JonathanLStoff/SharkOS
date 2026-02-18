@@ -59,9 +59,9 @@ HIZMOS is your all‑in‑one platform for wireless experimentation, education, 
 
 ❌ Hijack Nerf Devices (Work in progress)
 
-✅ 2.4GHz Jammer
+✅ 2.4GHz Disruptor
 
-✅ Jammer (Specific Channel)
+✅ Disruptor (Specific Channel)
 
 🗂️ File Manager
 

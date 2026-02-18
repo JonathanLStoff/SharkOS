@@ -1,0 +1,200 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+
+    <!-- Dark grey background gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#242424"/>
+      <stop offset="100%" stop-color="#1a1a1a"/>
+    </linearGradient>
+
+    <!-- Glow filter for green elements -->
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Strong glow for teeth/eye -->
+    <filter id="strongGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Scanlines overlay -->
+    <pattern id="scan" x="0" y="0" width="512" height="2" patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="512" height="1" fill="rgba(0,0,0,0.15)"/>
+    </pattern>
+
+    <!--
+      SHARK MASK — white = visible, black = hidden
+      The shark silhouette is drawn in white here.
+      Binary text rendered over the mask will only show inside the shark.
+
+      DESIGN: Classic Jaws great white, swimming LEFT
+      - Torpedo body, horizontal
+      - Snout on the LEFT, pointed
+      - Tail (caudal fin) on the RIGHT, forked vertically
+      - Dorsal fin rising UP from the top-center of the body
+      - Pectoral fin sweeping DOWN-LEFT from under the body
+      - Mouth OPEN at the left end, upper jaw above, lower jaw below
+      - Body center roughly y=270, spanning x=60 to x=430
+    -->
+    <mask id="sharkMask">
+
+      <!-- MAIN BODY: torpedo shape, slightly tapered at tail end -->
+      <!-- From snout tip (x=75, y=270) sweeping back to tail peduncle (x=410, y=270) -->
+      <ellipse cx="240" cy="268" rx="175" ry="72" fill="white"/>
+
+      <!-- Snout extension — pointy left end -->
+      <polygon points="
+        75,268
+        130,228
+        130,308
+      " fill="white"/>
+
+      <!-- Tail peduncle taper — narrow at x=400-440 -->
+      <polygon points="
+        390,238
+        440,268
+        390,298
+        350,285
+        350,251
+      " fill="white"/>
+
+      <!-- DORSAL FIN — tall triangle rising from top of body, center-left of body -->
+      <!-- Base: x=200-290, y=200 (top of body). Peak: x=230, y=100 -->
+      <polygon points="
+        200,200
+        290,200
+        255,95
+      " fill="white"/>
+
+      <!-- UPPER CAUDAL FIN (tail, top lobe) — sweeps up-right from tail -->
+      <polygon points="
+        410,250
+        470,175
+        460,230
+        430,255
+      " fill="white"/>
+
+      <!-- LOWER CAUDAL FIN (tail, bottom lobe) — sweeps down-right from tail -->
+      <polygon points="
+        410,285
+        470,360
+        455,300
+        430,280
+      " fill="white"/>
+
+      <!-- PECTORAL FIN — large swept fin below body, front-left area -->
+      <polygon points="
+        185,310
+        145,390
+        100,370
+        160,320
+      " fill="white"/>
+
+      <!-- LOWER JAW — drops down from snout, the open Jaws mouth -->
+      <!-- Upper jaw line: y≈255 at snout. Lower jaw drops to y≈320 -->
+      <polygon points="
+        75,268
+        130,255
+        145,290
+        115,320
+        75,300
+      " fill="white"/>
+
+    </mask>
+
+  </defs>
+
+  <!-- ==================== BACKGROUND ==================== -->
+  <rect width="512" height="512" rx="76" ry="76" fill="url(#bg)"/>
+
+  <!-- ==================== BINARY TEXT INSIDE SHARK ==================== -->
+  <!-- All this text is masked — only visible through the shark shape -->
+  <g mask="url(#sharkMask)" filter="url(#glow)">
+
+    <!-- Dense rows of binary covering the full shark bounding box -->
+    <!-- y from 95 to 380, rows every 11px, x from 55 to 480 -->
+
+    <text x="55" y="106"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="117"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+    <text x="55" y="128"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10101001011010100110101011001011010100110101011001</text>
+    <text x="55" y="139"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01101011010010110101010011010101100101101010010110</text>
+    <text x="55" y="150"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="161"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+    <text x="55" y="172"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10101001011010100110101011001011010100110101011001</text>
+    <text x="55" y="183"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">01101011010010110101010011010101100101101010010110</text>
+    <text x="55" y="194"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="205"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+    <text x="55" y="216"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">10101001011010100110101011001011010100110101011001</text>
+    <text x="55" y="227"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01101011010010110101010011010101100101101010010110</text>
+    <text x="55" y="238"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="249"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+    <text x="55" y="260"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10101001011010100110101011001011010100110101011001</text>
+    <text x="55" y="271"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01101011010010110101010011010101100101101010010110</text>
+    <text x="55" y="282"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="293"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+    <text x="55" y="304"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10101001011010100110101011001011010100110101011001</text>
+    <text x="55" y="315"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">01101011010010110101010011010101100101101010010110</text>
+    <text x="55" y="326"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="337"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+    <text x="55" y="348"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">10101001011010100110101011001011010100110101011001</text>
+    <text x="55" y="359"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">01101011010010110101010011010101100101101010010110</text>
+    <text x="55" y="370"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ff41" letter-spacing="0">10110100101101001011010010110100101101001011010010</text>
+    <text x="55" y="381"  font-family="'Courier New',Courier,monospace" font-size="10.5" fill="#00ee3a" letter-spacing="0">01001101010110010110101001101010110010110101001101</text>
+
+  </g>
+
+  <!-- ==================== MOUTH VOID ==================== -->
+  <!-- Dark gap between upper and lower jaw — the open mouth -->
+  <path d="
+    M 78,268
+    C 85,255  115,245  132,248
+    C 132,268  125,285  110,292
+    C 92,298   76,288   78,268 Z
+  " fill="#1e1e1e"/>
+
+  <!-- ==================== TEETH ==================== -->
+  <g filter="url(#strongGlow)">
+    <!-- Upper teeth, pointing DOWN from upper jaw edge -->
+    <polygon points="82,255  89,268  96,255"  fill="#00ff41"/>
+    <polygon points="96,251  103,264 110,251" fill="#00ff41"/>
+    <polygon points="110,249 117,262 124,249" fill="#00ff41"/>
+    <polygon points="124,249 131,262 138,249" fill="#00ff41"/>
+
+    <!-- Lower teeth, pointing UP from lower jaw -->
+    <polygon points="84,281  91,268  98,281"  fill="#00ff41"/>
+    <polygon points="98,285  106,272 114,285" fill="#00ff41"/>
+    <polygon points="114,288 122,276 130,288" fill="#00ff41"/>
+  </g>
+
+  <!-- ==================== EYE ==================== -->
+  <!-- Classic dead Jaws eye — black with subtle green matrix ring -->
+  <circle cx="155" cy="250" r="14" fill="#111111"/>
+  <circle cx="155" cy="250" r="10" fill="#050505"/>
+  <circle cx="155" cy="250" r="6"  fill="#004d15" filter="url(#glow)"/>
+  <circle cx="155" cy="250" r="4"  fill="#020202"/>
+  <circle cx="157" cy="248" r="1.8" fill="#00ff41" opacity="0.55"/>
+
+  <!-- ==================== SCANLINES ==================== -->
+  <rect width="512" height="512" rx="76" ry="76" fill="url(#scan)" opacity="0.6"/>
+
+  <!-- ==================== SHARKOS LABEL ==================== -->
+  <text
+    x="256" y="468"
+    font-family="'Courier New',Courier,monospace"
+    font-size="26"
+    font-weight="bold"
+    fill="#00ff41"
+    text-anchor="middle"
+    letter-spacing="8"
+    filter="url(#glow)">SHARKOS</text>
+
+</svg>

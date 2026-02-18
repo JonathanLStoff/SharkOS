@@ -1,5 +1,5 @@
 void handlesubghzmenu() {
-  const char* menuItems[] = {"READ", "READ RAW", "FREQUENCY ANALYZER", "JAMMER", "SAVED SIGNALS"};
+  const char* menuItems[] = {"READ", "READ RAW", "FREQUENCY ANALYZER", "JAMMER", "SAVED SIGNALS", "CC1101 READ", "CC1101 JAM", "LORA READ", "LORA JAM"};
   const int menuLength = sizeof(menuItems) / sizeof(menuItems[0]);
   const int visibleItems = 3;
 
@@ -36,10 +36,25 @@ void handlesubghzmenu() {
        ///read raw(); 
        break;
       case 2:
-       ///jammer();
+       ///frequency analyzer();
         break;
       case 3: 
-      ///saved();
+      ///disruptor();
+       break;
+      case 4:
+       ///saved();
+        break;
+      case 5:
+       // CC1101 READ
+       break;
+      case 6:
+       // CC1101 JAM
+       break;
+      case 7:
+       // LORA READ
+       break;
+      case 8:
+       // LORA JAM
        break;
       
     }

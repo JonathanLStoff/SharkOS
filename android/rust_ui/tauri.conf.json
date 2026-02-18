@@ -1,0 +1,29 @@
+{
+  "productName": "SharkOS",
+  "identifier": "com.sharkos",
+  "version": "0.1.0",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "./dist"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png", "icons/sharkos-icon.svg", "../../../assets/sharkos-icon.svg"]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "SharkOS",
+        "width": 800,
+        "height": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+  
+}

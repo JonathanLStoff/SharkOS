@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+.gradle/
+*.apk
+*.aar
+*.aab
+*.so
+*.dex
+
+# Rust
+target/
+Cargo.lock
+
+# Android
+android/app/build/
+android/app/src/main/jniLibs/
+android/local.properties
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+dist
+node_modules
+/android/deadcode

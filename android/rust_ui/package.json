@@ -1,0 +1,23 @@
+{
+  "name": "SharkOS",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "cd src && vite",
+    "build": "cd src && vite build --outDir ../dist",
+    "preview": "cd src && vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/plugin-log": "^2.8.0",
+    "@tauri-apps/plugin-shell": "2.3.5",
+    "chart.js": "^4.4.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.10.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.0"
+  }
+}

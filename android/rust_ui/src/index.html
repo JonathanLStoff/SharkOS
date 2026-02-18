@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SharkOS</title>
+    <style>
+      /* Theme mapped from Rust/egui theme constants */
+      :root{
+        --bg: #0a0a0a;               /* DEFAULT_DARK_COLOR */
+        --bg-panel: #141414;         /* DEFAULT_DARK_COLOR_BG */
+        --text: #ffffff;             /* DEFAULT_DARK_COLOR_TEXT */
+        --muted: #d6daf5;            /* UNHOVERED_DARK_TEXT_COLOR */
+        --accent: #0ea5e9;           /* DEFAULT_DARK_QUATERNARY_COLOR */
+        --danger: #dc2626;           /* DEFAULT_DARK_SECONDARY_COLOR */
+        --tertiary: #8c00ff;         /* DEFAULT_DARK_TERTIARY_COLOR */
+        --quinary: rgba(130,242,255,0.18); /* DEFAULT_DARK_QUINARY_COLOR */
+        --senary: rgba(216,139,255,0.18);  /* DEFAULT_DARK_SENARY_COLOR */
+        --quinary-darker: #244245;  /* DEFAULT_DARK_QUINARY_COLOR_DARKER */
+        --senary-darker: #3d2847;    /* DEFAULT_DARK_SENARY_COLOR_DARKER */
+        --light: #f5f5f5;            /* DEFAULT_LIGHT_COLOR */
+        --light-secondary: #dc2626;  /* DEFAULT_LIGHT_SECONDARY_COLOR */
+        --glass: rgba(255,255,255,0.03);
+        --card: #15181a;
+        --success: #39ff9b;
+        font-family: 'SpaceGrotesk', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      }
+
+      html,body{height:100%;margin:0;background:var(--bg);color:var(--text)}
+      .app{max-width:1100px;margin:18px auto;padding:18px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:12px;box-shadow:0 6px 40px rgba(0,0,0,0.6);}
+      header{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+      header h1{margin:0;font-size:20px;color:var(--accent)}
+      .toolbar{margin-left:auto;display:flex;gap:8px}
+      .btn{border:1px solid rgba(255,255,255,0.06);background:var(--card);color:var(--text);padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
+      .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+      /* disabled / playing states */
+      .btn[disabled]{opacity:.45;cursor:default;filter:grayscale(.2)}
+      .btn.playing{background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(0,0,0,0.04));border:1px solid rgba(0,0,0,0.2);}
+      #recordBtn.recording{color:#ff4d4d;box-shadow:0 6px 20px rgba(255,77,77,0.08)}
+
+      /* Main menu grid (2 x 8) */
+      #main-menu{display:grid;grid-template-columns:repeat(2,1fr);grid-auto-rows:56px;gap:12px}
+      .menu-btn{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--bg-panel),rgba(255,255,255,0.01));border-radius:10px;border:1px solid rgba(255,255,255,0.03);color:var(--text);font-weight:700;font-size:14px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,0.02)}
+      .menu-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,0,0,0.5)}
+      .menu-btn.selected{background:linear-gradient(180deg,var(--quinary),transparent);border-color:var(--quinary-darker);box-shadow:0 10px 30px rgba(0,0,0,0.6);outline:2px solid rgba(255,255,255,0.02)}
+      .menu-grid-title{color:var(--muted);font-size:12px;margin-bottom:6px}
+
+      /* Chart / templates */
+      #chart-screen{display:grid;grid-template-columns:1fr 360px;gap:16px}
+      .panels{background:var(--bg-panel);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.03)}
+      .chart-canvas{width:100%;height:240px;background:transparent}
+      #logs{height:240px;overflow:auto;font-family:monospace;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+      .hidden{display:none}
+
+      /* Submenu styling (use accent colors for visual hints) */
+      .submenu {display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+      .submenu .menu-btn{padding:12px 8px;font-size:13px;border:1px solid rgba(255,255,255,0.04)}
+      .submenu.ble .menu-btn{border-color:var(--tertiary)}
+      .submenu.wifi .menu-btn{border-color:var(--danger)}
+
+      /* Responsive */
+      @media(max-width:900px){#chart-screen{grid-template-columns:1fr} .chart-canvas{height:180px}}
+
+      /* Device picker modal */
+      #device-picker-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px}
+      #device-picker{
+        width:720px;
+        max-width:calc(100% - 48px);
+        min-height:220px;
+        background:var(--bg-panel);
+        border-radius:12px;
+        padding:20px;
+        box-sizing:border-box;
+        border:1px solid rgba(255,255,255,0.04);
+        box-shadow:0 8px 40px rgba(0,0,0,0.6);
+      }
+      #device-picker select{
+        width:100%;
+        padding:10px;
+        min-height:46px;
+        border-radius:8px;
+        background:transparent;
+        border:1px solid rgba(255,255,255,0.04);
+        color:var(--text);
+        font-weight:600;
+        white-space:nowrap; /* prevent wrapping inside select */
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      #device-picker .btn{min-width:120px}
+      @media(max-width:640px){
+        #device-picker{width:calc(100% - 32px);max-height:calc(100% - 48px);overflow:auto;padding:16px}
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+      /* small footer */
+      footer{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="backBtn" class="btn secondary">◀ Back</button>
+          <button id="recordBtn" class="btn" title="Record">●</button>
+          <button id="playBtn" class="btn" title="Play">▶</button>
+          <button id="stopBtn" class="btn" title="Stop">■</button>
+        </div>
+        <h1>SharkOS</h1>
+        <div class="toolbar">
+          <div id="connectedDevice" style="color:var(--muted);font-size:14px">No device connected</div>
+          <button id="requestPermsBtn" class="btn">Choose Device</button>
+        </div>
+      </header>
+
+      <!-- Device picker modal -->
+      <div id="device-picker-overlay" hidden=true role="dialog" aria-modal="true">
+        <div id="device-picker">
+          <h3 style="margin-top:0;color:var(--muted)">Select Bluetooth Device</h3>
+          <div style="margin:12px 0;">
+            <select id="deviceSelect" aria-label="Paired Bluetooth devices"></select>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+            <button id="refreshDeviceBtn" class="btn secondary">Refresh</button>
+            <button id="cancelDeviceBtn" class="btn secondary">Cancel</button>
+            <button id="saveDeviceBtn" class="btn">Save</button>
+            <button id="openBTScreenBtn" class="btn">Open Bluetooth Connection Screen</button>
+          </div>
+          <div id="devicePickerMsg" style="margin-top:8px;color:var(--muted);font-size:12px"></div>
+        </div>
+      </div>
+
+      <!-- MAIN MENU: 2 x 8 grid of buttons -->
+      <section id="main-menu" aria-label="main-menu" class="menu active">
+        <div class="menu-grid-title">MAIN MENU</div>
+        <div class="menu-grid-title"></div>
+
+        <button class="menu-btn" data-action="wifi">Wi‑Fi</button>
+        <button class="menu-btn" data-action="ble">BLE</button>
+        <button class="menu-btn" data-action="subghz">Sub‑GHz</button>
+        <button class="menu-btn" data-action="nrf-disruptor">nRF Disruptor</button>
+        <button class="menu-btn" data-action="nrf-scanner">nRF Scanner</button>
+        <button class="menu-btn" data-action="nfc">NFC</button>
+        <button class="menu-btn" data-action="cell-scan">Cell Scan</button>
+        <button class="menu-btn" data-action="infrared">Infrared</button>
+        <button class="menu-btn" data-action="gpio">GPIO</button>
+        <button class="menu-btn" data-action="apps">Apps</button>
+        <button class="menu-btn" data-action="bad-usb">Bad USB</button>
+        <button class="menu-btn" data-action="remotes">Universal Remotes</button>
+        <button class="menu-btn" data-action="oscilloscope">Oscilloscope</button>
+        <button class="menu-btn" data-action="wifi-scan">Wi‑Fi Scan</button>
+        <button class="menu-btn" data-action="sd">SD Tools</button>
+        <button class="menu-btn" data-action="settings">Settings</button>
+        <button class="menu-btn" data-action="about">About</button>
+      </section>
+
+      <!-- BLE Submenu -->
+      <section id="ble-menu" hidden=true>
+        <div class="menu-grid-title">BLE</div>
+        <div class="menu-grid-title"></div>
+        <div class="submenu ble">
+          <button class="menu-btn" data-action="ble-scanner">Scanner</button>
+          <button class="menu-btn" data-action="ble-packet-sender">Packet Sender</button>
+          <button class="menu-btn" data-action="ble-spoof">Spoof Device</button>
+        </div>
+      </section>
+
+      <!-- Wi‑Fi Submenu -->
+      <section id="wifi-menu" hidden=true>
+        <div class="menu-grid-title">Wi‑Fi</div>
+        <div class="menu-grid-title"></div>
+        <div class="submenu wifi">
+          <button class="menu-btn" data-action="wifi-scanner">Scanner</button>
+          <button class="menu-btn" data-action="wifi-deauth">Deauth</button>
+          <button class="menu-btn" data-action="wifi-spoofer">Spoofer</button>
+          <button class="menu-btn" data-action="wifi-packet-sender">Packet Sender</button>
+          <button class="menu-btn" data-action="wifi-restful">RESTful Request</button>
+        </div>
+      </section>
+
+      <!-- CHART / LOG SCREEN -->
+      <section id="chart-screen" class="hidden" hidden=true>
+        <div class="panels">
+          <h3 style="margin-top:0;color:var(--muted)">Signal / Channel Analysis</h3>
+          <canvas id="signalChart" class="chart-canvas"></canvas>
+          <canvas id="channelsChart" class="chart-canvas" style="margin-top:12px;height:140px"></canvas>
+        </div>
+
+        <aside class="panels">
+          <h3 style="margin-top:0;color:var(--muted)">Packet / Event Logs</h3>
+          <pre id="cell-scan-output" style="height:320px;overflow:auto;background:transparent;color:var(--success);padding:8px;border-radius:6px;font-family:monospace"></pre>
+        </aside>
+      </section>
+
+      <!-- SENSOR CHART (kept for compatibility with existing code) -->
+      <section id="sensor-panel" style="margin-top:14px" class="hidden" hidden=true>
+        <div class="panels">
+          <h3 style="margin-top:0;color:var(--muted)">Sensor Live (accelerometer)</h3>
+          <div id="chart-container"><canvas id="sensorChart" class="chart-canvas"></canvas></div>
+        </div>
+      </section>
+
+      <footer>SharkOS — web UI mirror of OLED menus · buttons navigate to reusable templates (charts / logs)</footer>
+    </div>
+
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

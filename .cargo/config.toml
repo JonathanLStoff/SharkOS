@@ -1,0 +1,10 @@
+[target.aarch64-apple-darwin]
+linker = "/usr/bin/cc"
+ar = "/opt/local/bin/ar"
+
+[target.x86_64-apple-darwin]
+linker = "/usr/bin/cc"
+ar = "/opt/local/bin/ar"
+
+
+

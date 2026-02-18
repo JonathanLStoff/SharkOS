@@ -60,18 +60,68 @@
 #include <IRremote.h>
 #include <Wire.h>
 #include <Adafruit_PN532.h>
+#include <RadioLib.h>
 
 #include <esp_wifi.h>
-#include "esp_heap_caps.h"
-#include "esp_spi_flash.h"
-#include "esp_chip_info.h"
-#include "esp_system.h"
+#include <ArduinoJson.h>
 
 
 // HID
 USBHIDKeyboard Keyboard;
 
 BleMouse mouse_ble("hizmos", "hizmos", 100);
+
+BLEServer *pServer;
+
+// BLE UUIDs and characteristics
+#define BLE_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BLE_MENU_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define BLE_CMD_CHAR_UUID "2a73f2c0-1fb5-459e-8fcc-c5c9c331914c"
+#define BLE_STATUS_CHAR_UUID "3a2743a1-1fb5-459e-8fcc-c5c9c331914d"
+
+#include <Preferences.h>
+
+BLECharacteristic *pMenuChar;
+BLECharacteristic *pCmdChar;
+BLECharacteristic *pStatusChar;
+
+Preferences prefs; // NVS storage
+bool paired = false;           // persistent auth flag
+bool pairingMode = false;      // enabled after timeout if not paired
+volatile bool anyConnected = false; // updated in server callbacks
+
+// State variables for commands
+bool scanningRadio = false;
+float scanFrequency = 433.0;
+String scanModulation = "OOK";
+bool readingNfc = false;
+bool sendingIr = false;
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    anyConnected = true;
+    Serial.println("BLE client connected");
+  }
+  void onDisconnect(BLEServer* pServer) {
+    anyConnected = false;
+    Serial.println("BLE client disconnected");
+  }
+};
+
+class CommandCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *p) {
+    std::string rx = p->getValue();
+    if (rx.length() > 0) {
+      String s = String(rx.c_str());
+      Serial.print("BLE Command received: ");
+      Serial.println(s);
+      handleBLECommand(s);
+    }
+  }
+};
+
+void handleBLECommand(String cmd); // forward
+void handleOngoingTasks(); // forward
 
 ///////////////////////////////////////////////////
 
@@ -149,13 +199,13 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(
 
 // Pins
 #define I2C_SDA 8
-#define I2C_SCL 9
+#define I2C_SCL 7
 
 // ==== IR Pins ====
-#define irsenderpin  41
-#define irrecivepin  40
+#define irsenderpin  17
+#define irrecivepin  18
 
-#define PN532_IRQ   22
+#define PN532_IRQ   6
 #define PN532_RESET 21
 
 TwoWire myWire(0);
@@ -179,13 +229,49 @@ Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET, &myWire);
 #define CE2_PIN   12
 #define CSN2_PIN  13
 
+// CC1101_1 via custom SPI (HSPI-like)
+#define CC1101_1_SCK   12
+#define CC1101_1_MISO  13
+#define CC1101_1_MOSI  11
+#define CC1101_1_CS    10
+#define CC1101_1_GDO0  9
+#define CC1101_1_GDO2  14
+
+// LoRa via custom SPI (FSPI-like)
+#define LORA_SCK   36
+#define LORA_MISO  37
+#define LORA_MOSI  35
+#define LORA_NSS   38
+#define LORA_RESET 39
+#define LORA_DIO0  40
+#define LORA_DIO1  41
+#define LORA_DIO2  42
+
+// CC1101_2 placeholder
+#define CC1101_2_SCK   69
+#define CC1101_2_MISO  69
+#define CC1101_2_MOSI  69
+#define CC1101_2_CS    69
+#define CC1101_2_GDO0  69
+#define CC1101_2_GDO2  69
+
 // RF24 objects using fspi
 SPIClass RADIO_SPI(FSPI);
 SPIClass SD_SPI(HSPI);
+SPIClass CC1101_SPI(HSPI); // Custom for CC1101
+SPIClass LORA_SPI(FSPI);   // Custom for LoRa
 
 
 RF24 radio1(CE1_PIN, CSN1_PIN);
 RF24 radio2(CE2_PIN, CSN2_PIN);
+
+// CC1101 module
+Module cc1101_module(CC1101_1_CS, CC1101_1_GDO0, RADIOLIB_NC, CC1101_1_GDO2, CC1101_SPI);
+CC1101 cc1101(&cc1101_module);
+
+// LoRa module
+Module lora_module(LORA_NSS, LORA_DIO0, LORA_RESET, LORA_DIO1, LORA_SPI);
+SX1276 lora(&lora_module);
 
 
 
@@ -280,6 +366,14 @@ void deactivateNRF1() {
 void deactivateNRF2() {
   digitalWrite(CSN2_PIN, HIGH);
   digitalWrite(CE2_PIN, LOW);
+}
+
+void deactivateCC1101() {
+  digitalWrite(CC1101_1_CS, HIGH);
+}
+
+void deactivateLoRa() {
+  digitalWrite(LORA_NSS, HIGH);
 }
 
 
@@ -422,7 +516,7 @@ static const unsigned char image_SDcardMounted_bits[] U8X8_PROGMEM = {0xff,0x07,
 
 
 
-void setup() {
+void deviceSetup() {
 
   pinMode(BTN_UP, INPUT_PULLUP);
    pinMode(BTN_DOWN, INPUT_PULLUP);
@@ -437,12 +531,16 @@ void setup() {
    pinMode(CSN2_PIN, OUTPUT);
    pinMode(CE1_PIN, OUTPUT);
    pinMode(CE2_PIN, OUTPUT);
+   pinMode(CC1101_1_CS, OUTPUT);
+   pinMode(LORA_NSS, OUTPUT);
 
    
   IrReceiver.begin(irrecivepin);
   IrSender.begin(irsenderpin);
 
   // I2C for both OLED and NFC
+  myWire.begin(I2C_SDA, I2C_SCL);
+  u8g2.setWire(&myWire);
   u8g2.begin();
   u8g2.setFont(u8g2_font_6x10_tf);
 
@@ -450,30 +548,80 @@ void setup() {
 
   nfc.SAMConfig();
 
+  // Init CC1101
+  int state = cc1101.begin(433.0);
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print("CC1101 init failed: ");
+    Serial.println(state);
+  }
+
+  // Init LoRa
+  state = lora.begin(915.0);
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print("LoRa init failed: ");
+    Serial.println(state);
+  }
+
 
 
 
    deactivateSD();
    deactivateNRF1();
    deactivateNRF2();
+   deactivateCC1101();
+   deactivateLoRa();
 
 
-   // Start both SPI buses
-   RADIO_SPI.begin(NRF_SCK, NRF_MISO, NRF_MOSI); // FSPI for radios
+   // Start SPI buses
+   RADIO_SPI.begin(NRF_SCK, NRF_MISO, NRF_MOSI); // FSPI for NRF
    SD_SPI.begin(SD_SCK, SD_MISO, SD_MOSI);    // HSPI for SD
+   CC1101_SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI); // Custom for CC1101
+   LORA_SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI); // Custom for LoRa
 
 
 
 
 
      Serial.begin(9600);
-     u8g2.begin();
 
      pixel.begin();                                         // INITIALIZE NEOPIXEL LED  
      pixel.setBrightness(80);                              // Optional: reduce brightness
      pixel.show();                                         // Initialize all pixels to 'off'
      USB.begin();
      Keyboard.begin();
+
+     // BLE Server for app control
+    BLEDevice::init("SharkOS");
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new ServerCallbacks());
+    BLEService *pService = pServer->createService(BLE_SERVICE_UUID);
+
+    // Menu (read), Command (write), Status (notify)
+    pMenuChar = pService->createCharacteristic(BLE_MENU_CHAR_UUID, BLECharacteristic::PROPERTY_READ);
+    pCmdChar = pService->createCharacteristic(BLE_CMD_CHAR_UUID, BLECharacteristic::PROPERTY_WRITE);
+    pStatusChar = pService->createCharacteristic(BLE_STATUS_CHAR_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+
+    // Initial menu value (JSON)
+    std::string menuJson = "{\"menu\":[\"CC1101 Read\",\"CC1101 Jam (disabled)\",\"LoRa Read\",\"LoRa Jam (disabled)\",\"IR Send\",\"NFC Read\"]}";
+    pMenuChar->setValue(menuJson);
+
+    pCmdChar->setCallbacks(new CommandCallbacks());
+
+    // Load persistent pairing state
+    prefs.begin("sharkos", false);
+    paired = prefs.getBool("paired", false);
+    pairingMode = false;
+    if (paired) {
+      Serial.println("Device previously paired (auth found)");
+      // notify status
+      if (pStatusChar) { std::string st("paired:yes"); pStatusChar->setValue(st); pStatusChar->notify(); }
+    }
+
+    pService->start();
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+    pAdvertising->start();
+    Serial.println("BLE advertising started");
 
    
 
