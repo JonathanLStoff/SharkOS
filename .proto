@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+enum RadioModule { CC1101_1 = 0; CC1101_2 = 1; LORA = 2; NFC = 3; WIFI = 4; BLUETOOTH = 5; IR = 6; }
+
+message RadioSignal {
+  uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+  RadioModule module = 2;
+  float frequency_mhz = 3;
+  int32 rssi = 4;                 // or lqi for LoRa
+  bytes payload = 5;              // raw packet bytes from CC1101/LoRa/NFC
+  // optional extras
+  string extra = 6;               // modulation, packet type, etc.
+}
+message Command {
+    uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+    string command = 2;             // command as string
+}

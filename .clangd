@@ -1,0 +1,6 @@
+# clangd project config: make .ino files parse as C++ with sane defaults
+---
+If:
+  PathMatch: .*\.ino$
+CompileFlags:
+  Add: [ -x, c++, -std=gnu++17, -DARDUINO, -I., -Imain, -I${workspaceFolder}/.vscode/arduino-stubs ]

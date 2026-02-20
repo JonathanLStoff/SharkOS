@@ -27,7 +27,8 @@
       }
 
       html,body{height:100%;margin:0;background:var(--bg);color:var(--text)}
-      .app{max-width:1100px;margin:18px auto;padding:18px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:12px;box-shadow:0 6px 40px rgba(0,0,0,0.6);}
+      /* constrain app to viewport so chart pages fit the device */
+      .app{max-width:1100px;margin:18px auto;padding:18px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:12px;box-shadow:0 6px 40px rgba(0,0,0,0.6);max-height:calc(100vh - 36px);display:flex;flex-direction:column;overflow:hidden;}
       header{display:flex;align-items:center;gap:12px;margin-bottom:18px}
       header h1{margin:0;font-size:20px;color:var(--accent)}
       .toolbar{margin-left:auto;display:flex;gap:8px}
@@ -47,9 +48,11 @@
 
       /* Chart / templates */
       #chart-screen{display:grid;grid-template-columns:1fr 360px;gap:16px}
-      .panels{background:var(--bg-panel);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.03)}
-      .chart-canvas{width:100%;height:240px;background:transparent}
-      #logs{height:240px;overflow:auto;font-family:monospace;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+      .panels{background:var(--bg-panel);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.03);box-sizing:border-box}
+      /* reduced heights so panels fit on mobile/screens without vertical overflow */
+      .chart-canvas{width:100%;height:180px;background:transparent}
+      #cell-scan-output{height:200px;overflow:auto;font-family:monospace;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+      .small-ctrl{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);cursor:pointer;margin:0 6px;font-weight:700}
       .hidden{display:none}
 
       /* Submenu styling (use accent colors for visual hints) */
@@ -59,7 +62,10 @@
       .submenu.wifi .menu-btn{border-color:var(--danger)}
 
       /* Responsive */
-      @media(max-width:900px){#chart-screen{grid-template-columns:1fr} .chart-canvas{height:180px}}
+      @media(max-width:900px){#chart-screen{grid-template-columns:1fr} .chart-canvas{height:180px}} 
+      /* Ensure chart-screen content scrolls within the device viewport */
+      #chart-screen{max-height:calc(100vh - 160px);overflow:auto}
+      .panels{overflow:auto}
 
       /* Device picker modal */
       #device-picker-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px}
@@ -179,11 +185,32 @@
           <button class="menu-btn" data-action="wifi-restful">RESTful Request</button>
         </div>
       </section>
+      <section id="sub-ghz-menu" hidden=true>
+        <div class="menu-grid-title">Sub‑GHz</div>
+        <div class="menu-grid-title"></div>
+        <div class="submenu sub-ghz">
+          <button class="menu-btn" data-action="sub-ghz-scanner">Scanner</button>
+          <button class="menu-btn" data-action="sub-ghz-playback">Playback</button>
+          <button class="menu-btn" data-action="sub-ghz-recorder">Recorder</button>
+          <button class="menu-btn" data-action="sub-ghz-packet-sender">Packet Sender</button>
+          <button class="menu-btn" data-action="sub-ghz-disruptor">Disruptor</button>
+        </div>
+      </section>
 
       <!-- CHART / LOG SCREEN -->
-      <section id="chart-screen" class="hidden" hidden=true>
+      <section id="chart-screen" class="chart-screen hidden" hidden=true>
         <div class="panels">
           <h3 style="margin-top:0;color:var(--muted)">Signal / Channel Analysis</h3>
+
+          <!-- sub‑GHz scanner controls (shown when scanner is active) -->
+          <div id="subghz-controls" style="display:none;margin-bottom:8px;align-items:center;gap:8px;">
+            <label style="color:var(--muted);font-size:13px;margin-right:6px">Frequency (MHz)</label>
+            <button id="subghzFreqDown" class="small-ctrl" aria-label="decrease frequency">−</button>
+            <input id="subghzFreqInput" type="number" min="300" max="1000" step="0.1" value="433.0" style="width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700;text-align:center" />
+            <button id="subghzFreqUp" class="small-ctrl" aria-label="increase frequency">+</button>
+            <small style="color:var(--muted);margin-left:8px">Range: 300 - 1000 MHz</small>
+          </div>
+
           <canvas id="signalChart" class="chart-canvas"></canvas>
           <canvas id="channelsChart" class="chart-canvas" style="margin-top:12px;height:140px"></canvas>
         </div>

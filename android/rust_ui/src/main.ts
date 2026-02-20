@@ -18,9 +18,20 @@ const menus = document.querySelectorAll<HTMLElement>('[id$="-menu"]');
 const charts = document.querySelectorAll<HTMLElement>(".chart-screen");
 // <-- UI state & helpers -->
 function showView(id: string) {
-  document.querySelectorAll('section').forEach(s => s.classList.add('hidden'));
+  // Use the `hidden` attribute consistently so <section hidden> in HTML works.
+  document.querySelectorAll('section').forEach(s => {
+    s.hidden = true;
+    s.classList.add('hidden');
+  });
   const el = document.getElementById(id);
-  if (el) el.classList.remove('hidden');
+  if (el) {
+    el.hidden = false;
+    el.classList.remove('hidden');
+    // mark submenu panels active for styling when appropriate
+    if (id.endsWith('-menu')) {
+      el.classList.add('active');
+    }
+  }
   // hide header controls when on main menu and clear selection state
   ['recordBtn','playBtn','stopBtn'].forEach(cid => {
     const c = document.getElementById(cid);
@@ -41,25 +52,14 @@ function hideAll() {
   charts.forEach(chart => chart.hidden = true);
 }
 function showMenu(id: string) {
-  const target = document.getElementById(id);
+  // Keep for semantic calls but delegate to showView so visibility
+  // and header controls stay consistent across the app.
   info(`showMenu: ${id}`);
-  if (target) {
-    target.classList.add("active");
-    target.hidden = false;
-
-  }
+  showView(id);
 }
-document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach(button => {
-  button.addEventListener("click", () => {
-    const action = button.dataset.action;
-    info(`Action button clicked, action: ${action}`);
-    if (action) {
-      hideMenus();
-      // use the attribute value as the target identifier
-      showMenu(action);
-    }
-  });
-});
+// NOTE: menu button handling is centralized in `setup()`'s wiring below.
+// The older generic binding was removed to avoid duplicate handlers and
+// to ensure submenu visibility uses `hidden = true/false` consistently.
 
 function appendLog(line: string) {
   const out = document.getElementById('cell-scan-output') as HTMLPreElement;
@@ -69,10 +69,11 @@ function appendLog(line: string) {
 }
 
 // <-- Main menu wiring -->
-const menuToTemplate: Record<string, { view: string; chart?: 'signal' | 'channels' | 'sensor' | 'logs' } > = {
+type MenuMapEntry = { view: string; chart?: 'signal' | 'channels' | 'sensor' | 'logs'; autoRun?: boolean };
+const menuToTemplate: Record<string, MenuMapEntry> = {
   'wifi': { view: 'wifi-menu' },                             // show Wi‑Fi submenu
   'ble': { view: 'ble-menu' },                               // show BLE submenu
-  'subghz': { view: 'chart-screen', chart: 'channels' },    // sub-GHz analyzer → channels
+  'subghz': { view: 'sub-ghz-menu' },    // open Sub‑GHz submenu (do not auto-run scanner)
   'nrf-disruptor': { view: 'chart-screen', chart: 'signal' },  // disruptor → signal plot
   'nrf-scanner': { view: 'chart-screen', chart: 'channels' },
   'nfc': { view: 'chart-screen', chart: 'logs' },
@@ -88,6 +89,17 @@ const menuToTemplate: Record<string, { view: string; chart?: 'signal' | 'channel
   'settings': { view: 'chart-screen', chart: 'logs' },
   'about': { view: 'chart-screen', chart: 'logs' }
 };
+
+// Add explicit mappings for sub‑GHz submenu actions (so the UI can route
+// and the Rust `run_action` plumbing will be used when desired).
+Object.assign(menuToTemplate, {
+  'sub-ghz-scanner': { view: 'chart-screen', chart: 'channels', autoRun: false },
+  'sub-ghz-playback': { view: 'chart-screen', chart: 'logs' },
+  'sub-ghz-recorder': { view: 'chart-screen', chart: 'logs' },
+  'sub-ghz-packet-sender': { view: 'chart-screen', chart: 'logs' },
+  'sub-ghz-disruptor': { view: 'chart-screen', chart: 'signal' }
+});
+
 
 // submenu items mapping → reuse chart/log templates
 Object.assign(menuToTemplate, {
@@ -115,45 +127,70 @@ function cssVar(name: string, fallback: string) {
 function createSignalChart() {
   const c = document.getElementById('signalChart') as HTMLCanvasElement | null;
   if (!c) return null;
-  return new Chart(c, {
-    type: 'line',
-    data: {
-      labels: Array.from({length:16}, (_,i)=>String(i)),
-      datasets: [
-        { label: 'R1', data: Array(16).fill(0).map(()=>Math.random()*30+20), borderColor: cssVar('--danger','#ff6384'), tension: 0.2 },
-        { label: 'R2', data: Array(16).fill(0).map(()=>Math.random()*30+5), borderColor: cssVar('--accent','#36a2eb'), tension: 0.2 }
-      ]
-    },
-    options: { animation: false, responsive:true, maintainAspectRatio:false }
-  });
+  try {
+    const start = performance.now();
+    const ch = new Chart(c, {
+      type: 'line',
+      data: {
+        labels: Array.from({length:16}, (_,i)=>String(i)),
+        datasets: [
+          { label: 'R1', data: Array(16).fill(0).map(()=>Math.random()*30+20), borderColor: cssVar('--danger','#ff6384'), tension: 0.2 },
+          { label: 'R2', data: Array(16).fill(0).map(()=>Math.random()*30+5), borderColor: cssVar('--accent','#36a2eb'), tension: 0.2 }
+        ]
+      },
+      options: { animation: false, responsive:true, maintainAspectRatio:false }
+    });
+    info(`createSignalChart: OK (${Math.round(performance.now()-start)}ms)`);
+    return ch;
+  } catch (err) {
+    error(`createSignalChart: error=${String(err)}`);
+    appendLog(`signalChart error: ${String(err)}`);
+    return null;
+  }
 }
 
 function createChannelsChart() {
   const c = document.getElementById('channelsChart') as HTMLCanvasElement | null;
   if (!c) return null;
-  return new Chart(c, {
-    type: 'bar',
-    data: {
-      labels: Array.from({length:16}, (_,i)=>`ch ${i}`),
-      datasets: [{ label: 'Energy', backgroundColor: cssVar('--accent','#0ea5e9'), data: Array(16).fill(0).map(()=>Math.random()*80) }]
-    },
-    options: { animation:false, responsive:true, maintainAspectRatio:false, scales:{y:{beginAtZero:true}} }
-  });
+  try {
+    const start = performance.now();
+    const ch = new Chart(c, {
+      type: 'bar',
+      data: {
+        labels: Array.from({length:16}, (_,i)=>`ch ${i}`),
+        datasets: [{ label: 'Energy', backgroundColor: cssVar('--accent','#0ea5e9'), data: Array(16).fill(0).map(()=>Math.random()*80) }]
+      },
+      options: { animation:false, responsive:true, maintainAspectRatio:false, scales:{y:{beginAtZero:true}} }
+    });
+    info(`createChannelsChart: OK (${Math.round(performance.now()-start)}ms)`);
+    return ch;
+  } catch (err) {
+    error(`createChannelsChart: error=${String(err)}`);
+    appendLog(`channelsChart error: ${String(err)}`);
+    return null;
+  }
 }
 
 function showChart(kind: string) {
   (document.getElementById('signalChart') as HTMLCanvasElement | null)?.parentElement?.classList.toggle('hidden', kind !== 'signal');
   (document.getElementById('channelsChart') as HTMLCanvasElement | null)?.parentElement?.classList.toggle('hidden', kind !== 'channels');
   (document.getElementById('sensorChart') as HTMLCanvasElement | null)?.parentElement?.classList.toggle('hidden', kind !== 'sensor');
-  if (kind === 'signal' && signalChart) signalChart.update();
-  if (kind === 'channels' && channelsChart) channelsChart.update();
-  if (kind === 'sensor' && sensorChart) sensorChart.update();
+  try {
+    if (kind === 'signal' && signalChart) signalChart.update();
+  } catch (err) { error('showChart(signal) update failed: ' + String(err)); appendLog('Chart error: '+String(err)); }
+  try {
+    if (kind === 'channels' && channelsChart) channelsChart.update();
+  } catch (err) { error('showChart(channels) update failed: ' + String(err)); appendLog('Chart error: '+String(err)); }
+  try {
+    if (kind === 'sensor' && sensorChart) sensorChart.update();
+  } catch (err) { error('showChart(sensor) update failed: ' + String(err)); appendLog('Chart error: '+String(err)); }
 }
 
 // <-- playing / recording state -->
 let isPlaying = false;
 let isRecording = false;
 let currentView = 'main-menu';
+let currentAction: string | null = null; // track last action (used by Play button)
 const recordedEvents: any[] = [];
 let simUpdateId: number | null = null;
 
@@ -166,24 +203,11 @@ function setPlaying(val: boolean) {
     stopBtn.disabled = !isPlaying;
     playBtn.classList.toggle('playing', isPlaying);
   }
-  // when not playing, stop simulated updates
-  if (isPlaying) {
-    if (!simUpdateId) {
-      simUpdateId = window.setInterval(() => {
-        // update simulated charts only when playing and visible
-        if (!isPlaying) return;
-        if (signalChart && !(document.getElementById('signalChart')?.parentElement?.classList.contains('hidden'))) {
-          (signalChart.data.datasets[0].data as number[]).push(Math.random()*60+10); (signalChart.data.datasets[0].data as any) = (signalChart.data.datasets[0].data as any).slice(-32);
-          (signalChart.data.datasets[1].data as number[]).push(Math.random()*40+5); (signalChart.data.datasets[1].data as any) = (signalChart.data.datasets[1].data as any).slice(-32);
-          signalChart.update();
-        }
-        if (channelsChart && !(document.getElementById('channelsChart')?.parentElement?.classList.contains('hidden'))) {
-          channelsChart.data.datasets[0].data = (channelsChart.data.datasets[0].data as number[]).map(v => Math.max(0, Math.min(100, v + (Math.random()-0.5)*10)));
-          channelsChart.update();
-        }
-      }, 700);
-    }
-  } else {
+  // IMPORTANT: do NOT generate fake/simulated signal/chart data here.
+  // isPlaying controls whether incoming (real) events update charts, but
+  // the app will NOT synthesize random data anymore.
+  if (!isPlaying) {
+    // ensure any leftover sim timer is cleared (defensive)
     if (simUpdateId) { window.clearInterval(simUpdateId); simUpdateId = null; }
   }
 }
@@ -382,10 +406,12 @@ async function setup() {
   })();
   info('setup: sensor chart initialized');
 
+  const tChartsStart = performance.now();
   signalChart = createSignalChart();
   info('setup: signalChart created');
   channelsChart = createChannelsChart();
   info('setup: channelsChart created');
+  info(`charts init took ${Math.round(performance.now() - tChartsStart)}ms`);
 
   // main menu buttons
   document.querySelectorAll('.menu-btn').forEach(btn => {
@@ -397,22 +423,49 @@ async function setup() {
   info('setup: main menu buttons wired');
 
   // navigate to a menu action (reusable from click handlers and routing)
-  function navigateToAction(action: string, replaceHistory = false) {
+  async function navigateToAction(action: string, replaceHistory = false) {
     const map = menuToTemplate[action];
     currentView = map?.view || 'chart-screen';
+
+    // hide any open submenus / charts first
     hideMenus();
-    if (map) {
+
+    // remember last selected UI action (used by header Play/Stop)
+    currentAction = action;
+
+    // If this action maps to a *submenu* (id ends with '-menu'), just show it.
+    if (map && map.view && map.view.endsWith('-menu')) {
       if (replaceHistory) history.replaceState({view: map.view}, '', '#'+action);
       else history.pushState({view: map.view}, '', '#'+action);
-      showMenu(map.view);
+      showView(map.view);
       if (map.chart) showChart(map.chart as any);
-      appendLog(`Opened: ${action}`);
+      appendLog(`Opened submenu: ${action}`);
       enableHeaderControls(true);
-      setPlaying(true);
+      // DO NOT auto-start playing / generating data — user will start explicitly
+      return;
+    }
+
+    // Non-submenu actions: invoke backend `run_action` and then show the
+    // configured view (or chart/logs fallback).
+    try {
+      const saved = loadSavedBTDevice();
+      const macaddy = (saved && saved.mac) ? saved.mac : "";
+      const result = await invoke<string>('run_action', { action, macaddy });
+      appendLog(`run_action(${action}, ${macaddy}) => ${result}`);
+    } catch (e) {
+      appendLog(`run_action(${action}) failed: ${String(e)}`);
+    }
+
+    // Show mapped view (if any) or default to chart logs
+    if (map && map.view) {
+      showView(map.view);
+      if (map.chart) showChart(map.chart as any);
+      enableHeaderControls(true);
+      // don't auto-play on navigation — let user press Play
     } else {
-      appendLog(`No UI mapping for: ${action}`);
-      showMenu('chart-screen');
+      showView('chart-screen');
       showChart('logs');
+      enableHeaderControls(true);
     }
   }
 
@@ -431,9 +484,39 @@ async function setup() {
   const recBtn = document.getElementById('recordBtn') as HTMLButtonElement | null;
   recBtn?.addEventListener('click', () => { setRecording(!isRecording); });
 
+  // wire sub‑GHz input + up/down controls
+  const freqInput = document.getElementById('subghzFreqInput') as HTMLInputElement | null;
+  document.getElementById('subghzFreqUp')?.addEventListener('click', () => { try { freqInput?.stepUp(); } catch(e){error(String(e));} });
+  document.getElementById('subghzFreqDown')?.addEventListener('click', () => { try { freqInput?.stepDown(); } catch(e){error(String(e));} });
+  freqInput?.addEventListener('keydown', (ev) => { if ((ev as KeyboardEvent).key === 'ArrowUp') { ev.preventDefault(); try{ freqInput.stepUp(); }catch{} } if ((ev as KeyboardEvent).key === 'ArrowDown') { ev.preventDefault(); try{ freqInput.stepDown(); }catch{} } });
+
   const playBtn = document.getElementById('playBtn') as HTMLButtonElement | null;
   const stopBtn = document.getElementById('stopBtn') as HTMLButtonElement | null;
-  playBtn?.addEventListener('click', () => { setPlaying(true); });
+  playBtn?.addEventListener('click', async () => {
+    // If we're on the sub‑GHz scanner page, start the _device_ scan with
+    // the frequency from the input (do NOT auto-start when the page is opened).
+    if (currentAction === 'sub-ghz-scanner') {
+      const freqEl = document.getElementById('subghzFreqInput') as HTMLInputElement | null;
+      const raw = freqEl?.value || '433';
+      const mhz = Number(raw);
+      if (isNaN(mhz) || mhz < 300 || mhz > 1000) {
+        error('[sub-ghz] frequency out of range (300-1000 MHz)');
+        appendLog('[sub-ghz] invalid frequency — must be 300-1000 MHz');
+        return;
+      }
+      // send run_action with params (frequency in kHz)
+      const macaddy = (loadSavedBTDevice()?.mac) || '';
+      try {
+        const params = { frequency_khz: Math.round(mhz * 1000), modulation: 'OOK' };
+        const res = await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(params) });
+        appendLog(`[sub-ghz] start -> ${res}`);
+      } catch (e) {
+        appendLog(`[sub-ghz] failed to start scan: ${String(e)}`);
+      }
+    }
+
+    setPlaying(true);
+  });
   stopBtn?.addEventListener('click', () => { setPlaying(false); });
 
   window.onpopstate = (ev) => {
@@ -450,15 +533,17 @@ async function setup() {
     if (!isPlaying) return; // respect pause
     const data = event.payload as {x:number;y:number;z:number;timestamp:number};
     if (!sensorChart) return;
-    sensorChart.data.labels?.push(new Date(data.timestamp).toLocaleTimeString());
-    (sensorChart.data.datasets[0].data as any[]).push(data.x);
-    (sensorChart.data.datasets[1].data as any[]).push(data.y);
-    (sensorChart.data.datasets[2].data as any[]).push(data.z);
-    if (sensorChart.data.labels && sensorChart.data.labels.length > MAX_DATA_POINTS) {
-      sensorChart.data.labels.shift();
-      sensorChart.data.datasets.forEach(d => d.data.shift());
-    }
-    sensorChart.update();
+    try {
+      sensorChart.data.labels?.push(new Date(data.timestamp).toLocaleTimeString());
+      (sensorChart.data.datasets[0].data as any[]).push(data.x);
+      (sensorChart.data.datasets[1].data as any[]).push(data.y);
+      (sensorChart.data.datasets[2].data as any[]).push(data.z);
+      if (sensorChart.data.labels && sensorChart.data.labels.length > MAX_DATA_POINTS) {
+        sensorChart.data.labels.shift();
+        sensorChart.data.datasets.forEach(d => d.data.shift());
+      }
+      sensorChart.update();
+    } catch (err) { error('sensor-update chart update failed: '+String(err)); appendLog('sensor chart error: '+String(err)); }
     if (isRecording) recordedEvents.push({type:'sensor-update', payload: data, ts: Date.now()});
   });
   info('setup: sensor-update listener registered');
@@ -470,11 +555,13 @@ async function setup() {
     appendLog(line);
     if (isRecording) recordedEvents.push({type:'cell-scan-result', payload: r, ts: Date.now()});
     // update a channels chart sample slot so UI reflects incoming data
-    if (channelsChart) {
-      const idx = Math.floor(Math.random() * (channelsChart.data.labels?.length||16));
-      (channelsChart.data.datasets[0].data as number[])[idx] = Math.abs(r.signal_dbm) % 100;
-      channelsChart.update();
-    }
+    try {
+      if (channelsChart) {
+        const idx = Math.floor(Math.random() * (channelsChart.data.labels?.length||16));
+        (channelsChart.data.datasets[0].data as number[])[idx] = Math.abs(r.signal_dbm) % 100;
+        channelsChart.update();
+      }
+    } catch (err) { error('cell-scan-result channelsChart update failed: '+String(err)); appendLog('channels chart error: '+String(err)); }
   });
   info('setup: cell-scan-result listener registered');
 
@@ -557,6 +644,12 @@ async function setup() {
     enableHeaderControls(false);
     setPlaying(false);
   }
+  // global error hook to capture UI crashes and surface in log panel
+  window.addEventListener('error', (ev: ErrorEvent) => {
+    appendLog(`UI ERROR: ${ev.message} @ ${ev.filename}:${ev.lineno}`);
+    error(`UI ERROR: ${ev.message}`, ev.error);
+  });
+
   routeFromHash();
   info('setup: routeFromHash executed');
 

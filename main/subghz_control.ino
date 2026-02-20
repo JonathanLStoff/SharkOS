@@ -1,3 +1,4 @@
+#include "globals.h"
 // Sub-GHz and control stubs (safe defaults)
 
 #include <Arduino.h>
@@ -6,6 +7,7 @@
 
 extern BLECharacteristic *pStatusChar;
 extern CC1101 cc1101;
+extern CC1101 cc1101_2;
 extern SX1276 lora;
 extern Adafruit_PN532 nfc;
 
@@ -15,7 +17,8 @@ extern bool pairingMode;
 
 void notifyStatus(const char *s) {
   if (pStatusChar) {
-    pStatusChar->setValue(std::string(s));
+    // Use std::string for BLECharacteristic::setValue overload
+    pStatusChar->setValue(String(s));
     pStatusChar->notify();
   }
 }
@@ -26,19 +29,43 @@ void cc1101Read() {
   notifyStatus("cc1101:read:placeholder:OK");
 }
 
+// --- CC1101 connectivity checks -------------------------------------------------
+// Returns true if the RadioLib CC1101 instance responds to SPI register reads.
+static inline bool cc1101IsPresent(CC1101 &mod) {
+  int16_t ver = mod.getChipVersion();
+  return (ver > 0); // positive version indicates a responding chip
+}
+
+// Check primary / secondary modules
+bool cc1101Connected() { return cc1101IsPresent(cc1101); }
+bool cc1101_2Connected() { return cc1101IsPresent(cc1101_2); }
+
+// Convenience: true only if both modules are present
+bool cc1101BothConnected() { return cc1101Connected() && cc1101_2Connected(); }
+
+// Optionally notify current connection state over BLE status characteristic
+void cc1101ReportConnectionStatus() {
+  DynamicJsonDocument doc(128);
+  doc["cc1101"]["primary"] = cc1101Connected() ? "connected" : "disconnected";
+  doc["cc1101"]["secondary"] = cc1101_2Connected() ? "connected" : "disconnected";
+  String json;
+  serializeJson(doc, json);
+  notifyStatus(json.c_str());
+}
+
 void loraRead() {
   Serial.println("LoRa read requested (placeholder)");
   notifyStatus("lora:read:placeholder:OK");
 }
 
 void cc1101Jam() {
-  // Jamming is disabled for safety and legality
+  // Disrupting is disabled for safety and legality
   Serial.println("CC1101 jamming command received but jamming is disabled for safety.");
   notifyStatus("ERROR: jamming_disabled");
 }
 
 void loraJam() {
-  // Jamming is disabled for safety and legality
+  // Disrupting is disabled for safety and legality
   Serial.println("LoRa jamming command received but jamming is disabled for safety.");
   notifyStatus("ERROR: jamming_disabled");
 }
@@ -67,7 +94,7 @@ void handleOngoingTasks() {
     String json;
     serializeJson(doc, json);
     if (pStatusChar) {
-      pStatusChar->setValue(std::string(json.c_str()));
+      pStatusChar->setValue(json);
       pStatusChar->notify();
     }
     Serial.println("Sent scan results: " + json);
@@ -91,7 +118,7 @@ void handleOngoingTasks() {
       String json;
       serializeJson(doc, json);
       if (pStatusChar) {
-        pStatusChar->setValue(std::string(json.c_str()));
+        pStatusChar->setValue(json);
         pStatusChar->notify();
       }
       Serial.println("Sent NFC data: " + json);
@@ -102,65 +129,6 @@ void handleOngoingTasks() {
   // Add other ongoing tasks if needed
 }
 
-void handleBLECommand(String jsonCmd) {
-  Serial.print("Handling BLE command: "); Serial.println(jsonCmd);
-
-  // Parse JSON
-  DynamicJsonDocument doc(1024);
-  DeserializationError error = deserializeJson(doc, jsonCmd);
-  if (error) {
-    Serial.print("JSON parse error: ");
-    Serial.println(error.c_str());
-    notifyStatus("ERROR:json_parse");
-    return;
-  }
-
-  // Check if it's a BleMessage
-  if (!doc.containsKey("Command") && !doc.containsKey("Response")) {
-    notifyStatus("ERROR:invalid_message");
-    return;
-  }
-
-  // For now, assume incoming are Commands (from Android)
-  if (doc.containsKey("Command")) {
-    JsonObject cmdObj = doc["Command"];
-    String cmdType = cmdObj.keys().next();
-
-    if (cmdType == "StartRadioScan") {
-      JsonObject params = cmdObj["StartRadioScan"];
-      if (params.containsKey("frequency")) {
-        scanFrequency = params["frequency"];
-      }
-      if (params.containsKey("modulation")) {
-        scanModulation = params["modulation"];
-      }
-      scanningRadio = true;
-      Serial.println("Starting radio scan");
-      notifyStatus("radio_scan:started");
-    } else if (cmdType == "StopRadioScan") {
-      scanningRadio = false;
-      Serial.println("Stopping radio scan");
-      notifyStatus("radio_scan:stopped");
-    } else if (cmdType == "ReadNfc") {
-      readingNfc = true;
-      Serial.println("Starting NFC read");
-      notifyStatus("nfc_read:started");
-    } else if (cmdType == "WriteNfc") {
-      // Not implemented yet
-      notifyStatus("ERROR:nfc_write_not_implemented");
-    } else if (cmdType == "SendIr") {
-      JsonObject irObj = cmdObj["SendIr"];
-      // Extract IrData
-      // For now, placeholder
-      Serial.println("IR send requested");
-      notifyStatus("ir_send:ok");
-    } else if (cmdType == "GetStatus") {
-      notifyStatus("status:ok");
-    } else {
-      notifyStatus("ERROR:unknown_command");
-    }
-  } else {
-    // Incoming Response? Not expected
-    notifyStatus("ERROR:unexpected_response");
-  }
-}
+// handleBLECommand moved to `events.ino` (events subsystem now handles
+// legacy JSON 'Command' messages and dispatches to `dispatch_command_key`)
+// Original implementation preserved in `events.ino`.

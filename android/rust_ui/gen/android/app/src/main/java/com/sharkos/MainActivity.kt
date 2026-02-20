@@ -12,6 +12,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import android.view.View
+import android.annotation.SuppressLint
 
 class MainActivity : TauriActivity() {
   // Enable webview back-navigation handling so Android back button navigates menus
@@ -102,6 +103,84 @@ class MainActivity : TauriActivity() {
     }
     obj.put("granted", granted)
     webViewRef?.post { webViewRef?.evaluateJavascript("window.dispatchEvent(new CustomEvent('permissions-result', { detail: ${obj.toString()} }));", null) }
+  }
+
+  // Synchronous helper exposed to JNI: connect to device by MAC, discover
+  // services and write the provided payload to the command characteristic.
+  // Returns true on success, false otherwise.
+  @SuppressLint("MissingPermission")
+  fun gattWriteCommand(mac: String, payload: String): Boolean {
+    try {
+      val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return false
+      if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+        // Missing runtime permission
+        return false
+      }
+
+      val device = adapter.getRemoteDevice(mac)
+      val latch = java.util.concurrent.CountDownLatch(1)
+      val writeOk = java.util.concurrent.atomic.AtomicBoolean(false)
+
+      val svcUuid = java.util.UUID.fromString("4fafc201-1fbd-459e-8fcc-c5c9c331914b")
+      val cmdCharUuid = java.util.UUID.fromString("2a73f2c0-1fbd-459e-8fcc-c5c9c331914c")
+
+      var gattRef: android.bluetooth.BluetoothGatt? = null
+
+      val cb = object : android.bluetooth.BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: android.bluetooth.BluetoothGatt, status: Int, newState: Int) {
+          if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+            gatt.discoverServices()
+          } else {
+            try { gatt.close() } catch (_: Exception) {}
+            latch.countDown()
+          }
+        }
+
+        override fun onServicesDiscovered(gatt: android.bluetooth.BluetoothGatt, status: Int) {
+          val svc = gatt.getService(svcUuid)
+          if (svc == null) {
+            gatt.disconnect()
+            gatt.close()
+            latch.countDown()
+            return
+          }
+          val ch = svc.getCharacteristic(cmdCharUuid)
+          if (ch == null) {
+            gatt.disconnect()
+            gatt.close()
+            latch.countDown()
+            return
+          }
+          ch.value = payload.toByteArray(Charsets.UTF_8)
+          val writeStarted = gatt.writeCharacteristic(ch)
+          if (!writeStarted) {
+            gatt.disconnect()
+            gatt.close()
+            latch.countDown()
+          }
+        }
+
+        override fun onCharacteristicWrite(gatt: android.bluetooth.BluetoothGatt, characteristic: android.bluetooth.BluetoothGattCharacteristic, status: Int) {
+          writeOk.set(status == android.bluetooth.BluetoothGatt.GATT_SUCCESS)
+          try { gatt.disconnect(); gatt.close() } catch (_: Exception) {}
+          latch.countDown()
+        }
+      }
+
+      // Connect (runs async; callback will signal latch)
+      gattRef = device.connectGatt(this, false, cb)
+
+      // Wait up to 5 seconds for the write to complete
+      val completed = latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+      if (!completed) {
+        try { gattRef?.disconnect(); gattRef?.close() } catch (_: Exception) {}
+        return false
+      }
+      return writeOk.get()
+    } catch (ex: Exception) {
+      ex.printStackTrace()
+      return false
+    }
   }
 
   companion object {

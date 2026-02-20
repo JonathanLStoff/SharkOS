@@ -1,0 +1,40 @@
+{
+  "configurations": [
+    {
+      "name": "ESP32 (macOS)",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/main",
+        "${workspaceFolder}/main/**",
+        "${env:HOME}/.arduino15/packages/esp32/hardware/esp32/**/cores/esp32",
+        "${env:HOME}/.arduino15/packages/esp32/hardware/esp32/**/variants/**",
+        "${env:HOME}/.arduino15/packages/esp32/hardware/esp32/**/libraries/**",
+        "${env:HOME}/Documents/Arduino/libraries/**",
+        "/Applications/Arduino.app/Contents/Java/hardware/**",
+        "/usr/local/include/**",
+        "/opt/homebrew/include/**"
+      ],
+      "defines": [
+        "ESP32",
+        "ARDUINO_ARCH_ESP32",
+        "ARDUINO=10805",
+        "NO_OLED"
+      ],
+      "compilerPath": "/usr/bin/clang",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "macos-clang-arm64",
+      "browse": {
+        "path": [
+          "${workspaceFolder}/main",
+          "${workspaceFolder}/**",
+          "${env:HOME}/.arduino15/packages/esp32/hardware/esp32/**/cores/esp32",
+          "${env:HOME}/.arduino15/packages/esp32/hardware/esp32/**/variants/**"
+        ],
+        "limitSymbolsToIncludedHeaders": true,
+        "databaseFilename": "${workspaceFolder}/.vscode/browse.vc.db"
+      }
+    }
+  ],
+  "version": 4
+}

@@ -1,3 +1,4 @@
+#include "globals.h"
 void restartesp() {
   // لو SELECT مضغوط → إعادة تشغيل
   if (digitalRead(BTN_SELECT) == LOW) {

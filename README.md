@@ -1,113 +1,194 @@
-<img width="160" height="160" alt="232096427-removebg-preview" src="https://github.com/user-attachments/assets/5dab2d59-6904-4110-a1c2-1896bf10f551" />
+# SharkOS
 
-📖 Explore the HIZMOS Wiki
+<img width="160" height="160" alt="SharkOS icon" src="android/rust_ui/icons/icon.png" />
 
-Dive into the complete HIZMOS story — from the first prototype to the fully‑loaded powerhouse it is today.
-The Wiki includes detailed hardware breakdowns, firmware tutorials, RF labs, NFC guides, BLE tools, and everything you need to master your device.
+SharkOS is an Android companion app + ESP32 firmware that provides a compact, mobile‑first toolbox for scanning, logging and interacting with radio and sensor hardware. The Android application (Tauri + web UI + Rust backend) pairs with an ESP32-based device (firmware in `main/`) over Bluetooth to perform scans, stream sensors, and control device features.
 
-From multi‑band RF analysis to advanced replay techniques, the Wiki walks you through every feature step‑by‑step.
-Click here to explore the full Wiki!
+This repository contains:
+- `android/rust_ui/` — Android app (frontend + Rust JNI/helpers)
+- `main/` — ESP32 firmware (Arduino `.ino` files)
 
-🌟 About the Project
+---
 
-HIZMOS is an ultra‑powerful, open‑source, next‑generation multi‑tool designed for creators, pentesters, and STEM learners.
-Built on the ESP32‑S3, HIZMOS brings together:
+## Features
 
-📡 Full 2.4GHz + 5GHz capabilities
+Core functionality
+- BLE device picker, bonding and connection flow
+- BLE scanning and device listing
+- Wi‑Fi network scanning and a Wi‑Fi packet sniffer (promiscuous mode)
+- nRF (2.4 GHz) channel analysis and visualization
+- IR receive & save remote signals
+- NFC read (PN532)
+- HID / BadUSB demo and HID script execution
+- SD card file browser (list, rename, delete)
+- Mini apps and utilities (oscilloscope stubs, games, tools)
+- Persistent saved device and runtime permission handling on Android
 
-🔊 Dual CC1101 modules for flexible Sub‑GHz capture + transmission
+Notes
+- Some advanced or destructive features (e.g. active jamming) are intentionally disabled or restricted for safety and legal reasons.
+- Several features are under active development — see project TODOs.
 
-🚀 2× GT24 Mini modules for long‑range digital wireless experiments
+---
 
-🔐 NFC (PN532), RFID 125kHz, and IR TX/RX
+## Getting started
 
-💡 1.54" high‑res OLED, RGB LED, and a smooth icon‑based UI
+Prerequisites
+- Node.js + npm
+- Rust toolchain (stable)
+- Android SDK/NDK and Java 17
+- A physical Android device (ADB) for APK install
+- ESP32 (ESP32‑S3 recommended) for firmware testing
 
-🔌 USB‑C OTG, HID tools, SD card support, and deep‑sleep modes
+Build & install Android APK
 
-🧰 A full toolkit for wireless testing, protocol analysis, signal visualization, data logging, and custom app development
+```bash
+# from repository root
+cd android/rust_ui
+npm install          # first time only
+npm run build
+cd ../..
+make apk-run         # builds and installs debug APK on connected device
+```
 
-Designed to be more capable, more open, and more affordable than anything in its class —
-HIZMOS is your all‑in‑one platform for wireless experimentation, education, and innovation.
+Flash ESP32 firmware
 
-![WhatsApp Image 2025-08-02 at 23 33 46_52c6faf6](https://github.com/user-attachments/assets/f6f69546-7636-4b5a-8ea0-cbe0d977c6f9)
+- Open the `main/` firmware in the Arduino IDE / PlatformIO and upload to your ESP32 board.
+- The firmware exposes BLE characteristics the Android app uses for commands and telemetry.
 
+---
 
-![ce98e05e-ab88-439e-80e3-fdce7ed647ef](https://github.com/user-attachments/assets/2637c95d-003a-45a1-95ac-b6e2210f10bc)
-<img width="803" height="710" alt="image" src="https://github.com/user-attachments/assets/9490e63d-0ef2-4b6a-aa0e-8bc1ead2c588" />
+## Development
 
+Frontend (hot reload)
 
-📡 Infrared (IR)
+```bash
+cd android/rust_ui
+npm run dev
+```
 
-❌ Universal Remotes (Work in progress)
+Run/build the mobile app
 
-✅ Read Remotes
+```bash
+# debug APK -> install via adb
+make apk-run
+```
 
-✅ Save Remotes
+Rust checks and builds live inside `android/rust_ui` (Tauri backend + JNI helpers).
 
-💻 BadUSB
+---
+## Tested on:
+### Android devices:
+- Motorola One 5G UW ace Android 12 (stock, no root)
 
-✅ Demo Payload
+### ESP32 hardware:
+    Chip type:          ESP32-S3 (QFN56) (revision v0.2)
+    Features:           Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded PSRAM 8MB (AP_3v3)
+    Crystal frequency:  40MHz
+    USB mode:           USB-Serial/JTAG
+    MAC:                1c:db:d4:ad:dd:64
+## Commands & protocol
 
-✅ Keyboard Emulation
+SharkOS documents BLE control commands (start/stop scanners, sensor streams, status reports) in `src/bt/commands.rs`. The Android UI sends these to the ESP32; see the firmware sources in `main/` for how the device responds.
 
-✅ HID Script Execution
+---
 
-📶 NRF Tools
+## Contributing
 
-✅ Signal Analyzer
+Contributions welcome — open issues or PRs. Keep changes lawful and safe; destructive or illegal functionality will not be accepted.
 
-❌ Hijack Nerf Devices (Work in progress)
+---
 
-✅ 2.4GHz Disruptor
+## License
 
-✅ Disruptor (Specific Channel)
+See `LICENSE` in this repository. Short version: use and modify SharkOS freely as long as your use complies with applicable law.
 
-🗂️ File Manager
+---
 
-✅ Browse Files
-
-✅ Rename Files
-
-✅ Delete Files
-
-🎮 Mini Apps
-
-✅ Basic Flipper-like Apps
-
-⚙️ Settings
-
-✅ Show Usage
-
-✅ Format SD Card
-
-✅ Restart Device
-
-❌ Battery Info (Work in progress)
-
-✅ SD Card Info
-
-✅ About
-
-✅ Check Connected Devices
-
-🧩 Not Yet Implemented
-
-🔲 NFC
-
-🔲 Sub-GHz
-
-🔲 GPIO Tools
-
-🔲 Wi-Fi Tools
-
-🔲 BLE Tools
+If you want a deeper developer guide (firmware flashing commands, protocol schema, or CI instructions), tell me which section to expand and I'll add it.
 
 
-Contact us on: https://www.instagram.com/hiktron/
-
-whatsapp: +201557322422
-
-help us to build more projects: https://www.patreon.com/c/HIKTRON
-
-get all new on : https://www.youtube.com/@HIKTRON
+# Planned future sections (not yet written):
+- "i2c scanner"
+- "dth11"
+- "gps"
+- "signal generator"
+- "button tester"
+- "pomdoro timer"
+- "oscilloscope"
+    - "Analog Read",
+    - "Wave Creator"
+- "sd flasher tool"
+- "pass generator"
+- Bad usb scripts:
+    - "DEMO",
+    - "KEYBOARD",
+    - "HID SCRIPT",
+    - "Open Notepad",
+    - "Open CMD",
+    - "Show IP",
+    - "Shutdown",
+    - "RickRoll",
+    - "Create Admin",
+    - "Disable Defender",
+    - "Open YouTube",
+    - "Lock PC",
+    - "Fake Update",
+    - "Endless Notepad",
+    - "Fake BSOD",
+    - "Flip Screen",
+    - "Matrix Effect",
+    - "I'm Watching U",
+    - "Open Google",
+    - "Open telegram",
+    - "Play Alarm Sound",
+    - "Endless CMD",
+    - "Type Gibberish",
+    - "Spam CAPSLOCK",
+    - "Open Calc",
+    - "Auto 'Hacked!'",
+    - "Turn Off Monitor",
+    - "Open RegEdit",
+    - "Kill Explorer",
+    - "Flash Screen",
+    - "Rename Desktop",
+    - "Toggle WiFi",
+    - "Auto Screenshot",
+    - "Spam Emojis",
+    - "Open Ctrl Panel",
+    - "Troll Wallpaper",
+    - "Open MS Paint",
+    - "Tab Switcher"
+- RFID/NFC tools
+    - "Read tag", 
+    - "Write Data", 
+    - "Saved Tags", 
+    - "Emulate Tag", 
+    - "P2P comunication"
+- "Wi‑Fi deauth" (disabled for safety)
+- "CC1101 Disruption" (disabled for safety)
+- "LoRa Disruption" (disabled for safety)
+- BLE tools
+    - "ble scanner",
+    - "BLE MOUSE", 
+    - "BLE KEYBOARD", 
+    - "BLE SCRIPT"
+    - "Scanner", 
+    - "Packet Sniffer",
+    - "Spoof Device",
+    - "GATT Explorer"
+- "UNIVERSAL REMOTE", 
+- "LEARN NEW REMOTE", 
+- "SAVED SIGNALS"
+- "IR BLASTER",
+- "IR Disruption" (disabled for safety)
+- Settings
+    - "show usage"
+    - "format sd", 
+    - "restart", 
+    - "batt info", 
+    - "sd info", 
+    - "about",
+    - "check sys devices"
+- Packet Analyzers
+    - "Wi‑Fi Channel Analysis",
+    - "nRF (2.4 GHz) Channel Analysis"

@@ -1,3 +1,4 @@
+#ifndef NO_OLED
 // OLED / menu images moved to deadcode
 // Placeholder header — original image arrays were removed from the active build to keep this device headless.
 // Arrays are archived elsewhere and can be restored manually if an OLED is added.
@@ -18,3 +19,4 @@ static const unsigned char image_scroll_indicator_bits[] U8X8_PROGMEM = {0x01,0x
 static const unsigned char image_selection_bar_bits[] U8X8_PROGMEM =  { /* big array */ };
 
 // Note: arrays are preserved but not compiled by default (NO_OLED defined in mainmenu.ino)
+#endif

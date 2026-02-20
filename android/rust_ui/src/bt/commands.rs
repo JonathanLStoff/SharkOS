@@ -63,6 +63,36 @@ fn make_bt_command_map() -> HashMap<String, String> {
         "Stop sub‑GHz receiver. No params.".into(),
     );
 
+    // Additional sub‑GHz UI actions (record/playback/packet send/disruptor)
+    m.insert(
+        "subghz.record.start".into(),
+        "Begin recording raw sub‑GHz samples to local buffer. Params: { duration_ms: int (optional) }".into(),
+    );
+    m.insert(
+        "subghz.record.stop".into(),
+        "Stop recording and save buffer. No params.".into(),
+    );
+    m.insert(
+        "subghz.playback.start".into(),
+        "Play back a recorded sub‑GHz sample. Params: { id: int (recording id), repeats: int (optional) }".into(),
+    );
+    m.insert(
+        "subghz.playback.stop".into(),
+        "Stop playback. No params.".into(),
+    );
+    m.insert(
+        "subghz.packet.send".into(),
+        "Send a custom sub‑GHz packet. Params: { frequency_khz: int, modulation: string, payload: string }".into(),
+    );
+    m.insert(
+        "subghz.disruptor.start".into(),
+        "Start continuous noise/jamming on given frequency. Params: { frequency_khz: int, power_dbm: int (optional) }".into(),
+    );
+    m.insert(
+        "subghz.disruptor.stop".into(),
+        "Stop disruptor. No params.".into(),
+    );
+
     // Oscilloscope / analog sampling (based on oscilloscope.ino)
     m.insert(
         "oscilloscope.start".into(),

@@ -1,8 +1,4 @@
-
-bool blescanner_isPressed(int pin) {
-  return digitalRead(pin) == LOW;
-}
-
+#include "globals.h"
 class blescanner_AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) override {
     blescanner_Device dev;
@@ -12,7 +8,6 @@ class blescanner_AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
     dev.address = advertisedDevice.getAddress().toString().c_str();
     dev.rssi = advertisedDevice.getRSSI();
 
-    // مصنع الجهاز
     if (advertisedDevice.haveManufacturerData()) {
       String mData = advertisedDevice.getManufacturerData();
 
@@ -27,7 +22,6 @@ class blescanner_AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
       dev.manufacturer = "unknown";
     }
 
-    // نوع الجهاز
     if (advertisedDevice.haveServiceUUID()) {
       dev.deviceType = advertisedDevice.getServiceUUID().toString().c_str();
     } else {
@@ -37,51 +31,6 @@ class blescanner_AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
     blescanner_devices.push_back(dev);
   }
 };
-
-void blescanner_drawMenu() {
-  setColor(0,0,0);
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_7x14_tr);
-
-  if (blescanner_devices.empty()) {
-    u8g2.drawStr(0, 30, "No devices found.");
-  } else {
-    int maxToShow = min(3, (int)blescanner_devices.size() - blescanner_selectedIndex);
-    for (int i = 0; i < maxToShow; i++) {
-      int idx = i + blescanner_selectedIndex;
-      int y = 16 + i * 18;
-      if (i == 0) {
-        u8g2.drawRBox(0, y - 14, 128, 18, 4);
-        u8g2.setDrawColor(0);
-        u8g2.drawStr(5, y, blescanner_devices[idx].name.c_str());
-        u8g2.setDrawColor(1);
-      } else {
-        u8g2.drawStr(5, y, blescanner_devices[idx].name.c_str());
-      }
-    }
-  }
-
-  u8g2.sendBuffer();
-}
-
-void blescanner_drawDeviceDetails(const blescanner_Device& dev) {
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 10, "Device Info:");
-  u8g2.setFont(u8g2_font_5x8_tr);
-
-  u8g2.drawStr(0, 22, ("Name: " + dev.name).c_str());
-  u8g2.drawStr(0, 32, ("MAC: " + dev.address).c_str());
-
-  char rssiStr[20];
-  sprintf(rssiStr, "RSSI: %d dBm", dev.rssi);
-  u8g2.drawStr(0, 42, rssiStr);
-
-  u8g2.drawStr(0, 52, ("Type: " + dev.deviceType).c_str());
-  u8g2.drawStr(0, 62, ("Manuf: " + dev.manufacturer).c_str());
-
-  u8g2.sendBuffer();
-}
 
 void blescanner_scan() {
   blescanner_devices.clear();

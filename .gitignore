@@ -20,7 +20,7 @@ android/local.properties
 .DS_Store
 
 # IDE
-.vscode/
+.vscode/settings.json
 .idea/
 
 # Logs
@@ -32,3 +32,4 @@ android/local.properties
 dist
 node_modules
 /android/deadcode
+/.vscode/arduino-stubs

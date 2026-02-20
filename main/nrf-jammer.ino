@@ -1,6 +1,7 @@
+#include "globals.h"
 // Namespace for RF jamming control and menu
 namespace nrf {
-  bool stopJamming = false;
+  bool stopDisrupting = false;
 
   const char* menuItems[] = {
     "Bluetooth",  // 0-78
@@ -17,25 +18,7 @@ namespace nrf {
 
 
 
-void drawMenuPage(int index) {
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_logisoso16_tr);
 
-  // Title centered
-  int strWidth = u8g2.getStrWidth(nrf::menuItems[index]);
-  u8g2.drawStr((128 - strWidth) / 2, 35, nrf::menuItems[index]);
-
-  // Bottom indicator
-  for (int i = 0; i < nrf::menuLength; i++) {
-    int x = 20 + i * 15;
-    if (i == index)
-      u8g2.drawDisc(x, 60, 3);  // filled
-    else
-      u8g2.drawCircle(x, 60, 3); // hollow
-  }
-
-  u8g2.sendBuffer();
-}
 
 void jamChannels(const char* label, int startCh, int endCh) {
   byte data1[32], data2[32];
@@ -44,22 +27,22 @@ void jamChannels(const char* label, int startCh, int endCh) {
     data2[i] = random(0, 256);
   }
 
-  for (int ch = startCh; ch <= endCh && !nrf::stopJamming; ch++) {
+  for (int ch = startCh; ch <= endCh && !nrf::stopDisrupting; ch++) {
     // Status screen
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_6x10_tr);
-    u8g2.drawStr(0, 10, "Jamming:");
-    u8g2.setCursor(60, 10);
-    u8g2.print(label);
-    u8g2.setCursor(0, 30);
-    u8g2.print("Channel: ");
-    u8g2.print(ch);
-    u8g2.sendBuffer();
+    // u8g2.clearBuffer();
+    // u8g2.setFont(u8g2_font_6x10_tr);
+    // u8g2.drawStr(0, 10, "Disrupting:");
+    // u8g2.setCursor(60, 10);
+    // u8g2.print(label);
+    // u8g2.setCursor(0, 30);
+    // u8g2.print("Channel: ");
+    // u8g2.print(ch);
+    // u8g2.sendBuffer();
 
     unsigned long startTime = millis();
-    while (millis() - startTime < JAM_DURATION) {
+    while (millis() - startTime < DISRUPT_DURATION) {
       if (digitalRead(BTN_BACK) == LOW) {
-        nrf::stopJamming = true;
+        nrf::stopDisrupting = true;
         return;
       }
       radio1.setChannel(ch);
@@ -76,7 +59,7 @@ void jamChannels(const char* label, int startCh, int endCh) {
 }
 
 void handleSelection(int item) {
-  nrf::stopJamming = false;
+  nrf::stopDisrupting = false;
 
   switch (item) {
     case 0:
@@ -96,9 +79,9 @@ void handleSelection(int item) {
       break;
   }
 
-  u8g2.clearBuffer();
-  u8g2.drawStr(0, 10, nrf::stopJamming ? "Stopped" : "Done");
-  u8g2.sendBuffer();
+  // u8g2.clearBuffer();
+  // u8g2.drawStr(0, 10, nrf::stopDisrupting ? "Stopped" : "Done");
+  // u8g2.sendBuffer();
   delay(1000);
 }
 
@@ -108,19 +91,19 @@ void handleSelection(int item) {
 void nrfdisruptor() {
   if (digitalRead(BTN_LEFT) == LOW) {
     nrf::currentPage = (nrf::currentPage - 1 + nrf::menuLength) % nrf::menuLength;
-    drawMenuPage(nrf::currentPage);
+    // drawMenuPage(nrf::currentPage);
     delay(200);
   }
 
   if (digitalRead(BTN_RIGHT) == LOW) {
     nrf::currentPage = (nrf::currentPage + 1) % nrf::menuLength;
-    drawMenuPage(nrf::currentPage);
+    // drawMenuPage(nrf::currentPage);
     delay(200);
   }
 
   if (digitalRead(BTN_SELECT) == LOW) {
     handleSelection(nrf::currentPage);
-    drawMenuPage(nrf::currentPage);
+    // drawMenuPage(nrf::currentPage);
     delay(200);
   }
 }

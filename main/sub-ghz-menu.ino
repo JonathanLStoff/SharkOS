@@ -1,3 +1,4 @@
+#include "globals.h"
 void handlesubghzmenu() {
   const char* menuItems[] = {"READ", "READ RAW", "FREQUENCY ANALYZER", "JAMMER", "SAVED SIGNALS", "CC1101 READ", "CC1101 JAM", "LORA READ", "LORA JAM"};
   const int menuLength = sizeof(menuItems) / sizeof(menuItems[0]);
@@ -6,43 +7,40 @@ void handlesubghzmenu() {
   static int selectedItem = 0;
   static int scrollOffset = 0;
 
-  // ✅ أضفنا ده لتتبع آخر وقت حصل فيه ضغط على زر
   static unsigned long lastInputTime = 0;
 
-  // ✅ هنا بنشوف هل فات وقت كافي (150ms) من آخر ضغط
   if (millis() - lastInputTime > 150) {
 
-  // ===== التعامل مع الأزرار =====
   if (digitalRead(BTN_UP) == LOW) {
     selectedItem--;
     if (selectedItem < 0) selectedItem = menuLength - 1;
     scrollOffset = constrain(selectedItem - visibleItems + 1, 0, menuLength - visibleItems);
-    lastInputTime = millis(); // ✅ حدثنا الوقت بعد الضغط
+    lastInputTime = millis(); 
   }
 
   if (digitalRead(BTN_DOWN) == LOW) {
     selectedItem++;
     if (selectedItem >= menuLength) selectedItem = 0;
     scrollOffset = constrain(selectedItem - visibleItems + 1, 0, menuLength - visibleItems);
-    lastInputTime = millis(); // ✅ حدثنا الوقت بعد الضغط
+    lastInputTime = millis(); 
   }
 
   if (digitalRead(BTN_SELECT) == LOW) {
     switch (selectedItem) {
       case 0:
-       ///read();
+        cc1101Read();
         break;
       case 1:
-       ///read raw(); 
-       break;
-      case 2:
-       ///frequency analyzer();
+        cc1101Read(); // READ RAW (placeholder)
         break;
-      case 3: 
-      ///disruptor();
-       break;
+      case 2:
+        notifyStatus("frequency.analyzer:not_implemented");
+        break;
+      case 3:
+        cc1101Jam();
+        break;
       case 4:
-       ///saved();
+        notifyStatus("subghz.saved:not_implemented");
         break;
       case 5:
        // CC1101 READ
@@ -58,43 +56,12 @@ void handlesubghzmenu() {
        break;
       
     }
-    lastInputTime = millis(); // ✅ حدثنا الوقت بعد الضغط
+    lastInputTime = millis(); 
   }
   }
-  // ===== عرض الشاشة =====
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_7x14_tf); // Nice clean font
+ 
 
-  for (int i = 0; i < visibleItems; i++) {
-    int menuIndex = i + scrollOffset;
-    if (menuIndex >= menuLength) break;
-
-    int y = i * 20 + 16;
-
-    if (menuIndex == selectedItem) {
-      u8g2.drawRBox(4, y - 12, 120, 16, 4); // Rounded highlight
-      u8g2.setDrawColor(0); // black text on white box
-      u8g2.drawStr(10, y, menuItems[menuIndex]);
-      u8g2.setDrawColor(1);
-    } else {
-      u8g2.drawStr(10, y, menuItems[menuIndex]);
-    }
-  }
-
-  // ===== شريط التمرير =====
-  int barX = 124;
-  int spacing = 64 / menuLength;
-
-  for (int i = 0; i < menuLength; i++) {
-    int dotY = i * spacing + spacing / 2;
-    if (i == selectedItem) {
-      u8g2.drawBox(barX, dotY - 3, 3, 6);
-    } else {
-      u8g2.drawPixel(barX + 1, dotY);
-    }
-  }
-
-  u8g2.sendBuffer();
+ 
   
 }
 

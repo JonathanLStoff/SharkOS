@@ -42,7 +42,27 @@ fn get_jni_and_activity() -> Result<(jni::JavaVM, JObject<'static>), jni::errors
     let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
     Ok((vm, activity))
 }
+#[tauri::command]
+fn run_action(action: &str, macaddy: &str, params: Option<String>) -> Result<String, String> {
+    info!("[run_action] Received action: {} mac={} params={:?}", action, macaddy, params);
 
+    // If params were provided, parse to JSON Value and forward to sender.
+    let params_json = match params {
+        Some(s) => match serde_json::from_str(&s) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                error!("[run_action] invalid params JSON: {:?}", e);
+                return Err(format!("invalid_params_json:{:?}", e));
+            }
+        },
+        None => None,
+    };
+
+    match crate::bt::sender::send_action(action, macaddy, params_json) {
+        Ok(r) => Ok(r),
+        Err(e) => Err(e),
+    }
+}
 #[tauri::command]
 fn trigger_bluetooth_connection_screen(macaddy: &str) -> Vec<Vec<String>> {
     info!(
@@ -235,7 +255,8 @@ pub fn run() {
             start_sensor_listener,
             cell_scan_start,
             trigger_bluetooth_connection_screen,
-            request_permissions
+            request_permissions,
+            run_action
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,3 +1,4 @@
+#include "globals.h"
 void handlesuniversalremotemenu() {
   const char* menuItems[] = {"TV", "AC", "PROJECTOR", "CAMERAS"};
   const int menuLength = sizeof(menuItems) / sizeof(menuItems[0]);

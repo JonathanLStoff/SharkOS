@@ -4,6 +4,8 @@ use log::{info, error};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 pub mod addresses;
+pub mod commands;
+pub mod sender;
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub name: String,

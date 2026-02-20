@@ -1,4 +1,5 @@
-void handlenfcmenu() {
+#include "globals.h"
+void nfc_init() {
   static bool initialized = false;
 
   if (!initialized) {
