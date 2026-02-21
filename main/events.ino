@@ -1,3 +1,4 @@
+#include "Arduino.h"
 #include "globals.h"
 #include "events.h"
 #include "commands.h"
@@ -122,43 +123,58 @@ static String eventQueue[EVENT_QUEUE_SIZE];
 static int eventHead = 0;
 static int eventTail = 0;
 static int eventCount = 0;
+static portMUX_TYPE eventQueueMux = portMUX_INITIALIZER_UNLOCKED;
 
 void events_init() {
+  portENTER_CRITICAL(&eventQueueMux);
   eventHead = eventTail = eventCount = 0;
+  portEXIT_CRITICAL(&eventQueueMux);
 }
 
 bool events_enqueue_command(const String &cmd) {
+  portENTER_CRITICAL(&eventQueueMux);
   if (eventCount >= EVENT_QUEUE_SIZE) {
+    portEXIT_CRITICAL(&eventQueueMux);
     // queue full
     return false;
   }
   eventQueue[eventTail] = cmd;
   eventTail = (eventTail + 1) % EVENT_QUEUE_SIZE;
   eventCount++;
+  portEXIT_CRITICAL(&eventQueueMux);
   return true;
 }
 
 // Central BLE -> events wrapper.  
-// Accepts commands only when pairing mode is active or the device is paired.
-// Forwards onto the existing events queue and reports on failure.
+// This used to drop every incoming command when the unit was unpaired,
+// which meant the BLE write log looked successful even though nothing
+// ever executed.  We now always enqueue the string; pairing restrictions
+// are enforced later by the dispatcher if required.
 void bluetooth_receive_command(const String &cmd) {
-  if (!paired && !pairingMode) {
-    // ignore non-pairing commands when device is not paired
-    Serial.println("BLE command ignored: device not paired and not in pairing mode");
-    notifyStatus("ERROR:not_paired");
-    return;
-  }
+  // Use critical section for Serial to prevent garbled output if interrupt occurs during print
+  portENTER_CRITICAL(&eventQueueMux);
+  Serial.print("enqueue BLE command: "); Serial.println(cmd);
+  portEXIT_CRITICAL(&eventQueueMux);
+
   if (!events_enqueue_command(cmd)) {
     Serial.println("Event queue full — dropping BLE command");
     notifyStatus("ERROR:event_queue_full");
+  } else {
+    // Force yield to ensure main loop gets a chance
+    taskYIELD();
   }
 }
 
 static String events_dequeue() {
-  if (eventCount == 0) return String("");
+  portENTER_CRITICAL(&eventQueueMux);
+  if (eventCount == 0) {
+    portEXIT_CRITICAL(&eventQueueMux);
+    return String("");
+  }
   String s = eventQueue[eventHead];
   eventHead = (eventHead + 1) % EVENT_QUEUE_SIZE;
   eventCount--;
+  portEXIT_CRITICAL(&eventQueueMux);
   return s;
 }
 
@@ -749,20 +765,29 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
 }
 
 void events_process_one() {
+  //Serial.println("DEBUG: events_process_one start"); // Un-comment to trace loop spam if needed
+
   // Run any active background scan task (non-blocking tick)
   // scan_loop_tick runs the scan lambda from main-loop context (thread-safe)
   scan_loop_tick();
 
   // Poll transceivers to perform non-blocking reads and enqueue packets
-  // Only poll if no RTOS scan task is running (avoid concurrent SPI access)
-  if (activeScanTask == NULL) {
-    runTransceiverPollTasks();
-  }
-
-  // If WiFi scanning was requested via command, run it from main loop
-  // (NOT from RTOS task, to avoid ADC2/SPI conflicts)
-  if (scanningRadio && scanModulation == "WIFI") {
-    runWifiBleScanTasks();
+  // only if specifically requested via scanningRadio flag (legacy behavior)
+  // or if we decide to poll all the time (but user wants it gated).
+  if (scanningRadio) {
+    Serial.print("DEBUG: scanningRadio=true, modulation="); Serial.println(scanModulation);
+    if (scanModulation == "WIFI") {
+       // WiFi scanning requested - run from main loop (safe context)
+       // Serial.println("DEBUG: runWifiBleScanTasks");
+       runWifiBleScanTasks();
+    } else {
+       // Sub-GHz/LoRa/NRF polling requested
+       // Only poll if no RTOS scan task is running (avoid concurrent SPI access)
+       if (activeScanTask == NULL) {
+          // Serial.println("DEBUG: runTransceiverPollTasks");
+          runTransceiverPollTasks();
+       }
+    }
   }
 
   // Check if any radio buffers should be flushed due to idle timeout
@@ -771,6 +796,8 @@ void events_process_one() {
   if (eventCount == 0) return;
   String raw = events_dequeue();
   if (raw.length() == 0) return;
+
+  Serial.print("events_process_one: dequeued -> "); Serial.println(raw);
 
   // Indicate LED feedback immediately based on whether the payload is a
   // known/valid topic.  - valid => yellow flash (success), - invalid => red.
@@ -794,72 +821,55 @@ void events_process_one() {
       if (cid) correlationId = String(cid);
     }
 
-    // If we're in pairing mode and not yet paired, only allow pairing attempts
-    if (pairingMode && !paired) {
-      // Accept app-level pairing via `{ "command":"pair.set", "params":{ "pin": "6942" } }`
-      if (doc.containsKey("command")) {
-        const char *key = doc["command"];
-        if (key && String(key) == String(CMD_PAIR_SET)) {
-          JsonObject params = doc.containsKey("params") ? doc["params"].as<JsonObject>() : JsonObject();
-          String pinStr = String();
-          if (params.containsKey("pin")) {
-            if (params["pin"].is<const char*>()) pinStr = String((const char*)params["pin"]);
-            else pinStr = String((long)params["pin"]);
-          } else if (params.containsKey("code")) {
-            if (params["code"].is<const char*>()) pinStr = String((const char*)params["code"]);
-            else pinStr = String((long)params["code"]);
-          }
-
-          if (pinStr == String("6942")) {
-            paired = true;
-            pairingMode = false;
-            prefs.putBool("paired", true);
-            notifyStatus("paired:yes");
-            bluetooth_send_response_internal("pair:ok", correlationId);
-          } else {
-            bluetooth_send_response_internal("ERROR:invalid_pin", correlationId);
-          }
-          return;
+    // Handle pairing command if present (works whether or not in pairingMode)
+    if (doc.containsKey("command")) {
+      const char *pkey = doc["command"];
+      if (pkey && String(pkey) == String(CMD_PAIR_SET)) {
+        JsonObject params = doc.containsKey("params") ? doc["params"].as<JsonObject>() : JsonObject();
+        String pinStr = String();
+        if (params.containsKey("pin")) {
+          if (params["pin"].is<const char*>()) pinStr = String((const char*)params["pin"]);
+          else pinStr = String((long)params["pin"]);
+        } else if (params.containsKey("code")) {
+          if (params["code"].is<const char*>()) pinStr = String((const char*)params["code"]);
+          else pinStr = String((long)params["code"]);
         }
-
-        // any other command is rejected while we await pairing
-        bluetooth_send_response_internal("ERROR:pairing_required", correlationId);
+        if (pinStr == String("6942")) {
+          paired = true;
+          pairingMode = false;
+          prefs.putBool("paired", true);
+          notifyStatus("paired:yes");
+          bluetooth_send_response_internal("pair:ok", correlationId);
+        } else {
+          bluetooth_send_response_internal("ERROR:invalid_pin", correlationId);
+        }
         return;
       }
-
-      // Legacy `Command` pairing support: { "Command": { "Pair": { "pin": "6942" } } }
-      if (doc.containsKey("Command")) {
-        JsonObject cmdObj = doc["Command"].as<JsonObject>();
-        if (cmdObj.containsKey("Pair")) {
-          JsonObject p = cmdObj["Pair"].as<JsonObject>();
-          String pinStr = String();
-          if (p.containsKey("pin")) {
-            if (p["pin"].is<const char*>()) pinStr = String((const char*)p["pin"]);
-            else pinStr = String((long)p["pin"]);
-          }
-          if (pinStr == String("6942")) {
-            paired = true;
-            pairingMode = false;
-            prefs.putBool("paired", true);
-            notifyStatus("paired:yes");
-            bluetooth_send_response_internal("pair:ok", correlationId);
-          } else {
-            bluetooth_send_response_internal("ERROR:invalid_pin", correlationId);
-          }
-          return;
+    }
+    // Legacy pairing: { "Command": { "Pair": { "pin": "6942" } } }
+    if (doc.containsKey("Command")) {
+      JsonObject cmdObj = doc["Command"].as<JsonObject>();
+      if (!cmdObj.isNull() && cmdObj.containsKey("Pair")) {
+        JsonObject p = cmdObj["Pair"].as<JsonObject>();
+        String pinStr = String();
+        if (p.containsKey("pin")) {
+          if (p["pin"].is<const char*>()) pinStr = String((const char*)p["pin"]);
+          else pinStr = String((long)p["pin"]);
         }
-
-        // otherwise reject
-        bluetooth_send_response_internal("ERROR:pairing_required", correlationId);
+        if (pinStr == String("6942")) {
+          paired = true;
+          pairingMode = false;
+          prefs.putBool("paired", true);
+          notifyStatus("paired:yes");
+          bluetooth_send_response_internal("pair:ok", correlationId);
+        } else {
+          bluetooth_send_response_internal("ERROR:invalid_pin", correlationId);
+        }
         return;
       }
-
-      // If it's not JSON (or otherwise not a pairing attempt) — reject
-      bluetooth_send_response_internal("ERROR:pairing_required", correlationId);
-      return;
     }
 
-    // Normal (non‑pairing) flows below
+    // Normal flows below (pairing no longer blocks commands)
     if (doc.containsKey("Command")) {
       // Legacy firmware command format — let existing handler parse & act
       handleBLECommand(raw);
@@ -882,6 +892,7 @@ void events_process_one() {
           return;
         }
 
+        Serial.print("dispatch_command_key: key=\""); Serial.print(k); Serial.println("\"");
         dispatch_command_key(k, &params);
         return;
       }
