@@ -33,3 +33,4 @@ dist
 node_modules
 /android/deadcode
 /.vscode/arduino-stubs
+esp32-dev/YD-ESP32-S3_ESP32-S3-WROOM-1_Dev
