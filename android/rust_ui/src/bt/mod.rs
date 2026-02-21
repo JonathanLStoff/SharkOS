@@ -6,6 +6,7 @@ use std::time::Duration;
 pub mod addresses;
 pub mod commands;
 pub mod sender;
+pub mod listener;
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub name: String,
@@ -246,9 +247,9 @@ pub fn request_bt_permissions(
 ) -> Result<bool, jni::errors::Error> {
     info!("request_bt_permissions: checking runtime BT permissions");
 
-    let helper = env.find_class("com/sharkos/PermissionHelper")?;
+    let _helper = env.find_class("com/sharkos/PermissionHelper")?;
 
-    let perms_json = env.new_string("[\"android.permission.BLUETOOTH_CONNECT\",\"android.permission.BLUETOOTH_SCAN\"]")?;
+    let _perms_json = env.new_string("[\"android.permission.BLUETOOTH_CONNECT\",\"android.permission.BLUETOOTH_SCAN\"]")?;
     // Parse JSON to String[] in Kotlin would be complex; instead just check each one individually via ContextCompat
     let context_compat = env.find_class("androidx/core/content/ContextCompat")?;
     let bt_connect = env.new_string("android.permission.BLUETOOTH_CONNECT")?;

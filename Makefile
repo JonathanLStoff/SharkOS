@@ -49,30 +49,16 @@ install-libs:
 	@$(ARDUINO_CLI) lib install "SD" || true
 	@echo "Library installation finished. Re-run 'make flash' to compile/upload."
 
-# Upload firmware to a USB-connected ESP32 (compile + upload)
-# Usage: `make flash` or `make flash PORT=/dev/cu.SLAB_USBtoUART`
-flash:
-	@echo "Compiling firmware and uploading to ESP32-S3 (FQBN=$(FQBN))..."
-	# Use explicit PORT if provided, otherwise prefer a usbmodem device, then fall back to other USB/serial candidates
-	@PORT=$${PORT:-$$(ls /dev/cu.* /dev/tty.* 2>/dev/null | egrep -i 'usbmodem' | head -n1)}; \
-	if [ -z "$$PORT" ]; then \
-		PORT=$$(ls /dev/cu.* /dev/tty.* 2>/dev/null | egrep -i 'usbserial|ttyUSB|ttyACM|CP210|FTDI|wch' | grep -vi Bluetooth | head -n1); \
-	fi; \
-	if [ -z "$$PORT" ]; then echo "No serial port detected. Set PORT=/dev/ttyUSB0 (or PORT=/dev/cu.SLAB_USBtoUART) and connect board."; exit 1; fi; \
-	echo "Using port: $$PORT"; \
-	# Always build for ESP32-S3 (default FQBN) — do NOT auto-detect or change FQBN.
-	$(ARDUINO_CLI) compile --fqbn "$(FQBN)" main && \
-	$(ARDUINO_CLI) upload -p "$$PORT" --fqbn "$(FQBN)" main
 
 # New: flash_v2 — recommended settings for YD-ESP32-S3 (YD modules: N16R8 / N8R2)
 # Usage examples:
 #   make flash_v2            -> defaults to 16MB flash (N16R8)
 #   FLASHSIZE=8MB make flash_v2   -> use 8MB flash (N8R2)
 #   PORT=/dev/cu.SLAB_USBtoUART flash_v2  -> override detected port
-flash_v2:
+flash:
 	@echo "Compiling + uploading using recommended ESP32-S3 FQBN (CDCOnBoot=cdc,PSRAM=opi)..."
 	# Allow override of exact FQBN or FLASHSIZE via environment variables
-	@FQBN_V2=$${FQBN_V2:-esp32:esp32:esp32s3:CDCOnBoot=cdc,UploadSpeed=921600,FlashMode=qio,FlashSize=$${FLASHSIZE:-16M},PartitionScheme=default,PSRAM=opi}; \
+	@FQBN_V2=$${FQBN_V2:-esp32:esp32:esp32s3:CDCOnBoot=cdc,UploadSpeed=921600,FlashMode=qio,FlashSize=$${FLASHSIZE:-16M},PartitionScheme=app3M_fat9M_16MB,PSRAM=opi}; \
 	PORT=$${PORT:-$$(ls /dev/cu.* /dev/tty.* 2>/dev/null | egrep -i 'usbmodem' | head -n1)}; \
 	if [ -z "$$PORT" ]; then \
 		PORT=$$(ls /dev/cu.* /dev/tty.* 2>/dev/null | egrep -i 'usbserial|ttyUSB|ttyACM|CP210|FTDI|wch' | grep -vi Bluetooth | head -n1); \
@@ -82,14 +68,6 @@ flash_v2:
 	echo "Using FQBN: $$FQBN_V2"; \
 	$(ARDUINO_CLI) compile --fqbn "$$FQBN_V2" main && \
 	$(ARDUINO_CLI) upload -p "$$PORT" --fqbn "$$FQBN_V2" main
-
-# Compile, upload, then open a serial monitor (115200)
-# Usage: `make flash-serial` or `make flash-serial PORT=/dev/cu.SLAB_USBtoUART`
-.PHONY: flash-serial
-flash-serial: flash
-	@PORT=$${PORT:-$$(ls /dev/cu.* /dev/tty.* 2>/dev/null | egrep -i 'usbmodem|slab|usbserial|cu\.' | head -n1)}; \
-	echo "Opening serial monitor on $$PORT (115200) — Ctrl+C to exit"; \
-	$(ARDUINO_CLI) monitor -p "$$PORT" -b 115200
 
 # Android Targets
 # Using Tauri for UI, so standard cargo-apk/gradle targets are replaced by tauri-mobile

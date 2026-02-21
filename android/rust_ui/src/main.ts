@@ -85,6 +85,7 @@ const menuToTemplate: Record<string, MenuMapEntry> = {
   'remotes': { view: 'chart-screen', chart: 'logs' },
   'oscilloscope': { view: 'sensor-panel', chart: 'sensor' },
   'wifi-scan': { view: 'chart-screen', chart: 'logs' },
+  'wifi-channel-scan': { view: 'chart-screen', chart: 'channels', autoRun: false },
   'sd': { view: 'chart-screen', chart: 'logs' },
   'settings': { view: 'chart-screen', chart: 'logs' },
   'about': { view: 'chart-screen', chart: 'logs' }
@@ -113,11 +114,48 @@ Object.assign(menuToTemplate, {
   'wifi-restful': { view: 'chart-screen', chart: 'logs' }
 });
 
+const WIFI_CHANNELS: Record<string, number> = {
+  // 2.4 GHz
+  "1": 2412, "2": 2417, "3": 2422, "4": 2427, "5": 2432, "6": 2437, "7": 2442,
+  "8": 2447, "9": 2452, "10": 2457, "11": 2462, "12": 2467, "13": 2472, "14": 2484,
+  // 5 GHz
+  "36": 5180, "40": 5200, "44": 5220, "48": 5240, "52": 5260, "56": 5280, "60": 5300,
+  "64": 5320, "100": 5500, "104": 5520, "108": 5540, "112": 5560, "116": 5580, "120": 5600,
+  "124": 5620, "128": 5640, "132": 5660, "136": 5680, "140": 5700, "144": 5720, "149": 5745,
+  "153": 5765, "157": 5785, "161": 5805, "165": 5825
+};
+// Reverse map: freq to channel
+const WIFI_FREQUENCIES: Record<string, number> = Object.entries(WIFI_CHANNELS).reduce((acc, [c, f]) => { acc[f.toString()] = parseInt(c); return acc; }, {} as Record<string, number>);
+
+function getChannelFromFreq(mhz: number): number | null {
+  if (WIFI_FREQUENCIES[mhz.toString()]) return WIFI_FREQUENCIES[mhz.toString()];
+  // fallback logic
+  if (mhz >= 2412 && mhz <= 2484) return Math.min(14, Math.max(1, Math.round((mhz - 2407) / 5)));
+  if (mhz >= 5170 && mhz <= 5835) return Math.round((mhz - 5000) / 5);
+  return null;
+}
+
 // <-- Charts -->
 let sensorChart: Chart | null = null;
 let signalChart: Chart | null = null;
 let channelsChart: Chart | null = null;
 const MAX_DATA_POINTS = 60;
+
+// Channel/frequency range vars (can be set at runtime)
+let channelsXMin: number | null = null;
+let channelsXMax: number | null = null;
+
+function setChartRange(kind: 'channels' | 'signal', min: number | null, max: number | null) {
+  if (kind === 'channels' && channelsChart) {
+    channelsXMin = min; channelsXMax = max;
+    const xScale: any = channelsChart.options!.scales!['x'] as any;
+    if (min !== null) xScale.min = min;
+    else delete xScale.min;
+    if (max !== null) xScale.max = max;
+    else delete xScale.max;
+    channelsChart.update();
+  }
+}
 
 function cssVar(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name);
@@ -129,18 +167,38 @@ function createSignalChart() {
   if (!c) return null;
   try {
     const start = performance.now();
-    const ch = new Chart(c, {
+    // Create a single, empty line dataset for stability (no initial bars/spikes)
+    // Animation is disabled to avoid intermittent crashes on some devices.
+    // @ts-ignore global Chart
+    const ch = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'line',
       data: {
-        labels: Array.from({length:16}, (_,i)=>String(i)),
         datasets: [
-          { label: 'R1', data: Array(16).fill(0).map(()=>Math.random()*30+20), borderColor: cssVar('--danger','#ff6384'), tension: 0.2 },
-          { label: 'R2', data: Array(16).fill(0).map(()=>Math.random()*30+5), borderColor: cssVar('--accent','#36a2eb'), tension: 0.2 }
+          {
+            label: 'Signal',
+            data: [],
+            borderColor: cssVar('--accent', '#0ea5e9'),
+            backgroundColor: 'rgba(14,165,233,0.06)',
+            fill: true,
+            pointRadius: 0,
+            tension: 0.2
+          }
         ]
       },
-      options: { animation: false, responsive:true, maintainAspectRatio:false }
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+          x: { display: true, title: { display: true, text: 'Time' } },
+          y: { display: true, title: { display: true, text: 'Amplitude' } }
+        },
+        plugins: { legend: { display: false } }
+      }
     });
-    info(`createSignalChart: OK (${Math.round(performance.now()-start)}ms)`);
+    info(`createSignalChart: OK (${Math.round(performance.now() - start)}ms)`);
+    try { attachZoomHandlers(c.parentElement as HTMLElement | null); } catch {}
     return ch;
   } catch (err) {
     error(`createSignalChart: error=${String(err)}`);
@@ -154,15 +212,75 @@ function createChannelsChart() {
   if (!c) return null;
   try {
     const start = performance.now();
-    const ch = new Chart(c, {
+    // Use a horizontal bar chart where Y is Channel and X is RSSI (represented as strength 0-100%)
+    // Since Chart.js handles categories on the index axis, if indexAxis='y', Y is categorical.
+    // However, we want numeric Y (channel).
+    // Let's stick to vertical bars (Standard Bar Chart) with X as Channel.
+    // But user asked for "annotation of which wifi ssid is on the side". Side usually means Y axis if vertical?
+    // Or maybe horizontal bars?
+    // Let's implement a Vertical Bar Chart grouped by Channel.
+    // X Axis: Channel (Category)
+    // Y Axis: Signal Strength (RSSI).
+    // Tooltip: SSID.
+    
+    // To support multiple SSIDs per channel without clutter, we can use a "bubble" chart?
+    // Or just a bar chart where we only keep the strongest per channel?
+    // The user said "group based on channels" and "annotation... on the side".
+    // A horizontal bar chart listing SSIDs on Y axis and RSSI on X axis, grouped by color?
+    // No, "line graph for channels... should be bar graph".
+    // I will use a Bar chart with data points {x: channel, y: strength, ssid: string}.
+
+    // @ts-ignore global Chart
+    const ch = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'bar',
-      data: {
-        labels: Array.from({length:16}, (_,i)=>`ch ${i}`),
-        datasets: [{ label: 'Energy', backgroundColor: cssVar('--accent','#0ea5e9'), data: Array(16).fill(0).map(()=>Math.random()*80) }]
+      data: { 
+        datasets: [{
+          label: 'Wi-Fi Networks',
+          data: [], // objects { x: channel, y: rssi+100 (0-100 scale), ssid: 'name' }
+          // Changed from blue (--accent) to #DC2626 as requested
+          backgroundColor: '#DC2626',
+          borderWidth: 0,
+          barPercentage: 0.8,
+          categoryPercentage: 1.0
+        }]
       },
-      options: { animation:false, responsive:true, maintainAspectRatio:false, scales:{y:{beginAtZero:true}} }
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'x', // Vertical bars
+        scales: {
+          x: { 
+            type: 'linear', 
+            display: true, 
+            title: { display: true, text: 'Channel' },
+            min: channelsXMin ?? undefined, 
+            max: channelsXMax ?? undefined, 
+            ticks: { stepSize: 1 } 
+          },
+          y: { 
+            display: true, 
+            title: { display: true, text: 'Signal Strength (RSSI + 100)' },
+            min: 0,
+            max: 100
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx: any) => {
+                const raw = ctx.raw as any;
+                return `${raw.ssid || 'Unknown'}: ${raw.y - 100} dBm`;
+              }
+            }
+          }
+        }
+      }
     });
-    info(`createChannelsChart: OK (${Math.round(performance.now()-start)}ms)`);
+
+    info(`createChannelsChart: OK (${Math.round(performance.now() - start)}ms)`);
+    try { attachZoomHandlers(c.parentElement as HTMLElement | null); } catch {}
     return ch;
   } catch (err) {
     error(`createChannelsChart: error=${String(err)}`);
@@ -171,9 +289,56 @@ function createChannelsChart() {
   }
 }
 
+// Lightweight per-container zoom/scroll support for canvases. Zoom is
+// applied as a CSS scale on the canvas while the container remains scrollable.
+function attachZoomHandlers(container: HTMLElement | null) {
+  if (!container) return;
+  container.classList.add('zoomable-container');
+  const canvas = container.querySelector('canvas') as HTMLCanvasElement | null;
+  if (!canvas) return;
+  let scale = 1;
+  const min = 0.6;
+  const max = 3;
+  container.style.overflow = 'auto';
+  container.style.touchAction = 'pan-x pan-y';
+  canvas.style.transformOrigin = 'center center';
+  canvas.style.transition = 'transform 80ms linear';
+  container.addEventListener('wheel', (ev) => {
+    // require ctrl/meta to zoom so normal scroll still pans
+    if (!ev.ctrlKey && !ev.metaKey) return;
+    ev.preventDefault();
+    const delta = ev.deltaY > 0 ? -0.08 : 0.08;
+    scale = Math.min(max, Math.max(min, scale + delta));
+    canvas.style.transform = `scale(${scale})`;
+  }, { passive: false });
+}
+
 function showChart(kind: string) {
-  (document.getElementById('signalChart') as HTMLCanvasElement | null)?.parentElement?.classList.toggle('hidden', kind !== 'signal');
-  (document.getElementById('channelsChart') as HTMLCanvasElement | null)?.parentElement?.classList.toggle('hidden', kind !== 'channels');
+  const signalPanel = document.getElementById('signal-panel');
+  const channelsPanel = document.getElementById('channels-panel');
+  
+  // Hide log panel for channel scan to maximize space
+  const logPanel = document.querySelector('.log-panel') as HTMLElement | null;
+  if (logPanel) {
+    const hideLog = (currentAction === 'wifi-channel-scan' || kind === 'channels');
+    logPanel.style.display = hideLog ? 'none' : '';
+    // Make main panel take full width when log is hidden
+    const mainPanel = document.querySelector('.chart-main') as HTMLElement | null;
+    if (mainPanel) {
+      mainPanel.style.flex = hideLog ? '1 1 100%' : '2';
+    }
+  }
+
+  if (signalPanel) {
+    const show = kind === 'signal';
+    signalPanel.classList.toggle('hidden', !show);
+    (signalPanel as HTMLElement).hidden = !show;
+  }
+  if (channelsPanel) {
+    const show = kind === 'channels';
+    channelsPanel.classList.toggle('hidden', !show);
+    (channelsPanel as HTMLElement).hidden = !show;
+  }
   (document.getElementById('sensorChart') as HTMLCanvasElement | null)?.parentElement?.classList.toggle('hidden', kind !== 'sensor');
   try {
     if (kind === 'signal' && signalChart) signalChart.update();
@@ -226,6 +391,16 @@ function enableHeaderControls(enabled: boolean) {
   if (rec) { rec.style.display = enabled ? '' : 'none'; rec.disabled = !enabled; }
   if (play) { play.style.display = enabled ? '' : 'none'; play.disabled = !enabled || isPlaying; play.classList.toggle('playing', isPlaying); }
   if (stop) { stop.style.display = enabled ? '' : 'none'; stop.disabled = !enabled || !isPlaying; }
+  const hdr = document.getElementById('subghz-header-controls') as HTMLElement | null;
+  if (hdr) {
+    // show header subghz controls only when header controls are enabled and
+    // the current action is the sub-ghz scanner; otherwise hide.
+    hdr.style.display = enabled && currentAction === 'sub-ghz-scanner' ? '' : 'none';
+  }
+  const wifihdr = document.getElementById('wifi-header-controls') as HTMLElement | null;
+  if (wifihdr) {
+    wifihdr.style.display = enabled && currentAction === 'wifi-channel-scan' ? '' : 'none';
+  }
 }
 
 const BT_PERMISSIONS = [
@@ -390,6 +565,35 @@ function hideDevicePicker() {
 // <-- initialize UI & listeners -->
 async function setup() {
   info('setup: initializing UI');
+  // orient app to landscape (either primary or secondary).
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('landscape').catch(e => {
+      info('orientation lock failed: ' + String(e));
+    });
+  }
+  // ensure we have file read/write permissions on Android before using storage
+  async function ensureFilePermissions(): Promise<boolean> {
+    if (!window.AndroidBridge) {
+      return true;
+    }
+    const perms = ['android.permission.WRITE_EXTERNAL_STORAGE','android.permission.READ_EXTERNAL_STORAGE'];
+    const have = window.AndroidBridge.hasPermissions(JSON.stringify(perms));
+    if (have) return true;
+    return new Promise(resolve => {
+      const handler = (ev: Event) => {
+        window.removeEventListener('permissions-result', handler);
+        const ok = window.AndroidBridge!.hasPermissions(JSON.stringify(perms));
+        resolve(ok);
+      };
+      window.addEventListener('permissions-result', handler);
+      window.AndroidBridge.requestPermissions(JSON.stringify(perms));
+    });
+  }
+  const storageOk = await ensureFilePermissions();
+  if (!storageOk) {
+    error('Storage permissions denied');
+  }
+
   // build charts (templates)
   sensorChart = (function initSensor(){
     const ctx = document.getElementById('sensorChart') as HTMLCanvasElement | null;
@@ -412,6 +616,39 @@ async function setup() {
   channelsChart = createChannelsChart();
   info('setup: channelsChart created');
   info(`charts init took ${Math.round(performance.now() - tChartsStart)}ms`);
+
+  // zoom handlers are attached in chart creation
+
+  // Wire header sub‑GHz frequency controls (moved into header). These are
+  // hidden by default and shown only when the Sub‑GHz scanner view is active.
+  const subFreqInput = document.getElementById('subghzFreqInput') as HTMLInputElement | null;
+  const subFreqUp = document.getElementById('subghzFreqUp') as HTMLButtonElement | null;
+  const subFreqDown = document.getElementById('subghzFreqDown') as HTMLButtonElement | null;
+  const hdrControls = document.getElementById('subghz-header-controls') as HTMLElement | null;
+  if (subFreqUp && subFreqDown && subFreqInput) {
+    const step = parseFloat(subFreqInput.step || '0.1');
+    subFreqUp.addEventListener('click', () => {
+      const v = Math.min(parseFloat(subFreqInput.max || '1000'), parseFloat(subFreqInput.value || '433') + step);
+      subFreqInput.value = v.toFixed(1);
+    });
+    subFreqDown.addEventListener('click', () => {
+      const v = Math.max(parseFloat(subFreqInput.min || '300'), parseFloat(subFreqInput.value || '433') - step);
+      subFreqInput.value = v.toFixed(1);
+    });
+    subFreqInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); subFreqUp.click(); }
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); subFreqDown.click(); }
+    });
+  }
+
+  // Periodically toggle header controls visibility based on current view/action.
+  setInterval(() => {
+    try {
+      if (!hdrControls) return;
+      const shouldShow = (currentView === 'chart-screen' && currentAction === 'sub-ghz-scanner');
+      hdrControls.style.display = shouldShow ? '' : 'none';
+    } catch (e) { /* noop */ }
+  }, 200);
 
   // main menu buttons
   document.querySelectorAll('.menu-btn').forEach(btn => {
@@ -450,7 +687,15 @@ async function setup() {
     try {
       const saved = loadSavedBTDevice();
       const macaddy = (saved && saved.mac) ? saved.mac : "";
-      const result = await invoke<string>('run_action', { action, macaddy });
+      
+      let params: any = null;
+      if (action === 'wifi-channel-scan') {
+         const band = (document.getElementById('wifiBandSelect') as HTMLSelectElement)?.value || '2.4';
+         const chan = (document.getElementById('wifiChannelSelect') as HTMLSelectElement)?.value || 'all';
+         params = { band, channel: (chan === 'all' ? 0 : parseInt(chan)) };
+      }
+
+      const result = await invoke<string>('run_action', { action, macaddy, params: params ? JSON.stringify(params) : null });
       appendLog(`run_action(${action}, ${macaddy}) => ${result}`);
     } catch (e) {
       appendLog(`run_action(${action}) failed: ${String(e)}`);
@@ -461,7 +706,12 @@ async function setup() {
       showView(map.view);
       if (map.chart) showChart(map.chart as any);
       enableHeaderControls(true);
-      // don't auto-play on navigation — let user press Play
+      // Auto-play for actions that immediately start streaming data (e.g.
+      // wifi-channel-scan sends the BLE command above, so data arrives right away).
+      if (action === 'wifi-channel-scan' || action === 'wifi-scan' || action === 'wifi-scanner'
+          || action === 'ble-scanner' || action === 'nrf-scanner' || action === 'nrf-disruptor') {
+        setPlaying(true);
+      }
     } else {
       showView('chart-screen');
       showChart('logs');
@@ -565,6 +815,223 @@ async function setup() {
   });
   info('setup: cell-scan-result listener registered');
 
+  // ---- Decode helpers for PROTO:base64 payloads ----
+  function decodeProtoPayload(raw: string): any | null {
+    // raw is the string from the CustomEvent detail — either JSON, PROTO:base64,
+    // or a plain base64 string.
+    if (typeof raw !== 'string') return raw; // already an object
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('{')) {
+      try { return JSON.parse(trimmed); } catch { return null; }
+    }
+    let b64 = trimmed;
+    if (trimmed.startsWith('PROTO:')) b64 = trimmed.slice(6);
+    let bytes: Uint8Array;
+    try {
+      const bin = atob(b64);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    } catch { return null; }
+    // strip optional 0xAA55 + u16 length framing
+    let cursor = 0;
+    if (bytes.length >= 4 && bytes[0] === 0xAA && bytes[1] === 0x55) {
+      cursor = 4;
+    }
+    // minimal protobuf varint parser
+    const obj: any = {};
+    let i = cursor;
+    function readVarint(): number {
+      let val = 0, shift = 0;
+      while (i < bytes.length) {
+        const b = bytes[i++];
+        val |= (b & 0x7F) << shift;
+        if ((b & 0x80) === 0) break;
+        shift += 7;
+      }
+      return val >>> 0; // unsigned
+    }
+    while (i < bytes.length) {
+      const tag = readVarint();
+      const field = tag >>> 3;
+      const wire = tag & 0x7;
+      if (wire === 0) { // varint
+        const val = readVarint();
+        if (field === 1) obj.timestamp_ms = val;
+        else if (field === 2) obj.module = val;
+        else if (field === 4) {
+          // rssi is stored as a signed zigzag or raw int; ESP uses raw cast
+          // interpret as signed 32-bit
+          obj.rssi = (val | 0);
+        }
+      } else if (wire === 5) { // 32-bit fixed
+        if (i + 4 <= bytes.length) {
+          const dv = new DataView(bytes.buffer, bytes.byteOffset + i, 4);
+          const f = dv.getFloat32(0, true); // little-endian
+          i += 4;
+          if (field === 3) obj.frequency_mhz = f;
+        } else break;
+      } else if (wire === 2) { // length-delimited
+        const len = readVarint();
+        if (i + len <= bytes.length) {
+          const slice = bytes.slice(i, i + len);
+          i += len;
+          if (field === 5) {
+            obj.payload = btoa(String.fromCharCode(...slice));
+          } else if (field === 6) {
+            obj.extra = new TextDecoder().decode(slice);
+          }
+        } else break;
+      } else {
+        break; // unknown wire type
+      }
+    }
+    return (Object.keys(obj).length > 0) ? obj : null;
+  }
+
+
+// BLE Advertising Channels: 37, 38, 39 are primary. Data channels 0-36.
+// LE scanners typically hop all 3 advertising channels.
+function getBleChannel(freq: number): number | null {
+  // Approximate frequency to channel mapping for BLE
+  // 2402 -> 37, 2426 -> 38, 2480 -> 39 (Advertising)
+  // Data channels are 2404-2478
+  if (freq === 2402) return 37;
+  if (freq === 2426) return 38;
+  if (freq === 2480) return 39;
+  if (freq >= 2404 && freq <= 2478) {
+      return Math.round((freq - 2404) / 2); // Channels 0-36
+  }
+  return null;
+}
+
+  // Unified handler for radio signal data – works whether data arrives via
+  // the Tauri event bus or the window CustomEvent from handleRadioNotification.
+  function handleRadioSignalData(raw: any) {
+    const processSignal = (s: any) => {
+      const ts = s.timestamp_ms ? new Date(s.timestamp_ms) : new Date();
+      appendLog(`[RADIO] ${s.frequency_mhz ?? '?'} MHz rssi=${s.rssi ?? '?'} ${s.extra ? '('+s.extra+')' : ''}`);
+      if (signalChart && typeof s.rssi === 'number') {
+        signalChart.data.labels = signalChart.data.labels || [];
+        signalChart.data.labels.push(ts.toLocaleTimeString());
+        (signalChart.data.datasets[0].data as any[]).push(s.rssi);
+        if (signalChart.data.labels.length > MAX_DATA_POINTS) {
+          signalChart.data.labels.shift();
+          signalChart.data.datasets.forEach(d => d.data.shift());
+        }
+        signalChart.update();
+      }
+      // For channel analysis we push scatter points with X=Channel, Y=strength/count
+      if (channelsChart && typeof s.frequency_mhz === 'number' && s.frequency_mhz > 0) {
+        try {
+          const ds = channelsChart.data.datasets[0];
+          if (!ds) return;
+
+          // Determine mode based on active action to decide how to process
+          let channel: number | null = null;
+          let isBle = false;
+
+          if (currentAction === 'wifi-channel-scan' || s.module === 4 /* WIFI */) {
+             channel = getChannelFromFreq(s.frequency_mhz) || s.frequency_mhz; // fallback to raw
+          } else if (currentAction === 'ble-scanner' || s.module === 5 /* BT */) {
+             channel = getBleChannel(s.frequency_mhz);
+             isBle = true;
+             if (channel === null && s.frequency_mhz === 0 && s.extra) {
+               // If no freq but we have extra data (name/mac), maybe just show as channel 0?
+               // Or skip. Skipping for now.
+               return; 
+             }
+          } else {
+             // Fallback
+             channel = s.frequency_mhz; 
+          }
+
+          if (channel === null) return;
+
+          // If in Wi-Fi scan mode, perform active filtering based on header selections
+          if (currentAction === 'wifi-channel-scan') {
+             const bandSel = (document.getElementById('wifiBandSelect') as HTMLSelectElement)?.value || '2.4';
+             const chanSel = (document.getElementById('wifiChannelSelect') as HTMLSelectElement)?.value || 'all';
+
+             // Band filtering
+             const is24 = (channel >= 1 && channel <= 14);
+             const is5 = (channel >= 36);
+             if (bandSel === '2.4' && !is24) return;
+             if (bandSel === '5' && !is5) return;
+
+             // Channel filtering
+             if (chanSel !== 'all' && parseInt(chanSel) !== channel) return;
+          }
+
+          // Bar chart: x=Channel, y=Signal Strength (normalized: -100dBm -> 0)
+          // SSID stored in `ssid` property for tooltip
+          const strength = Math.max(0, (s.rssi ?? -100) + 100);
+          const ssid = s.extra || 'Unknown';
+          
+          // Check if we already have this SSID on this channel to update it instead of adding redundant bars
+          const dataArr = ds.data as any[];
+          const existingIdx = dataArr.findIndex(d => d.x === channel && d.ssid === ssid);
+          
+          if (existingIdx >= 0) {
+             dataArr[existingIdx].y = strength;
+          } else {
+             dataArr.push({ x: channel, y: strength, ssid: ssid });
+          }
+
+          // keep reasonable history? No, for bar chart we want current snapshot.
+          // Maybe clear old ones?
+          // We can remove items that haven't been updated recently if we tracked timestamp.
+          // For now, let's just limit total count to avoid memory leaks if scanning 100s of APs.
+          if (dataArr.length > 200) {
+             // remove oldest? or random?
+             // Ideally we'd remove by timestamp. Simple shift is okay for now.
+             dataArr.shift();
+          }
+          
+          channelsChart.update();
+        } catch (e) { error('channelsChart update failed: '+String(e)); }
+      }
+      if (isRecording) recordedEvents.push({ type: 'radio-signal', payload: s, ts: Date.now() });
+    };
+
+    // `raw` may be a string (PROTO:base64 or JSON), an already-parsed object,
+    // or a batch wrapper.
+    let r: any = raw;
+    if (typeof raw === 'string') {
+      r = decodeProtoPayload(raw);
+      if (!r) {
+        appendLog(`[RADIO] undecoded payload (${raw.length} chars)`);
+        return;
+      }
+    }
+    if (r && r.type === 'radio-batch' && Array.isArray(r.signals)) {
+      for (const s of r.signals) {
+        processSignal(s);
+        try { invoke('bt_listener_append', { payload: JSON.stringify(s) }).catch(() => {}); } catch {}
+      }
+    } else {
+      processSignal(r);
+      try { invoke('bt_listener_append', { payload: JSON.stringify(r) }).catch(() => {}); } catch {}
+    }
+  }
+
+  // Listen on the Tauri event bus (emitted from Rust backend)
+  await listen<any>('radio-signal', (event) => {
+    if (!isPlaying) return;
+    try { handleRadioSignalData(event.payload); } catch (err) { error('radio-signal (tauri) error: '+String(err)); }
+  });
+
+  // Listen on window CustomEvents (dispatched by handleRadioNotification in
+  // MainActivity.kt via evaluateJavascript). This is the primary path on
+  // Android when BLE notifications arrive.
+  window.addEventListener('radio-signal', (ev: Event) => {
+    if (!isPlaying) return;
+    try {
+      const detail = (ev as CustomEvent).detail;
+      handleRadioSignalData(detail);
+    } catch (err) { error('radio-signal (window) error: '+String(err)); }
+  });
+  info('setup: radio-signal listener registered');
+
   // header cell-scan button removed (cell scan is now a main-menu item)
   // (legacy header button listener intentionally removed)
 
@@ -607,6 +1074,89 @@ async function setup() {
     }
     hideDevicePicker();
   });
+
+  // Wi-Fi Header Controls Logic
+  const wifiBand = document.getElementById('wifiBandSelect') as HTMLSelectElement | null;
+  const wifiChan = document.getElementById('wifiChannelSelect') as HTMLSelectElement | null;
+
+  function updateWifiChannelOptions() {
+    if (!wifiBand || !wifiChan) return;
+    const band = wifiBand.value;
+    // preserve selection if possible? No, reset to all makes most sense on band switch.
+    while (wifiChan.options.length > 0) wifiChan.remove(0);
+
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all';
+    allOpt.text = 'All Channels';
+    wifiChan.add(allOpt);
+
+    // List standard channels
+    const channels = band === '2.4'
+      ? Array.from({length: 14}, (_, i) => i + 1)
+      : [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165];
+
+    channels.forEach(ch => {
+      const opt = document.createElement('option');
+      opt.value = String(ch);
+      opt.text = `Channel ${ch}`;
+      wifiChan.add(opt);
+    });
+
+    // Update chart range immediately
+    if (band === '2.4') setChartRange('channels', 1, 14);
+    else setChartRange('channels', 36, 165);
+    
+    // Clear chart data on band switch to avoid confusion
+    if (channelsChart) {
+      channelsChart.data.datasets.forEach(ds => ds.data = []);
+      channelsChart.update();
+    }
+  }
+
+  if (wifiBand) {
+    wifiBand.addEventListener('change', () => {
+       updateWifiChannelOptions();
+       if (isPlaying && currentAction === 'wifi-channel-scan') {
+          // Restart scan with new params
+          const action = 'wifi-channel-scan';
+          const saved = loadSavedBTDevice();
+          const macaddy = (saved && saved.mac) ? saved.mac : "";
+          const band = wifiBand.value || '2.4';
+          const chan = (wifiChan?.value || 'all');
+          const params = { band, channel: (chan === 'all' ? 0 : parseInt(chan)) };
+          
+          invoke<string>('run_action', { action, macaddy, params: JSON.stringify(params) })
+            .then(r => appendLog(`Switched band to ${band} => ${r}`))
+            .catch(e => error(String(e)));
+       }
+    });
+    // Init
+    updateWifiChannelOptions();
+  }
+  
+  if (wifiChan) {
+    wifiChan.addEventListener('change', () => {
+      // Just clear chart when filter changes? Or keep data but filtering happens on-ingest.
+      // Better to clear old data that might be hidden now.
+      if (channelsChart) {
+        channelsChart.data.datasets.forEach(ds => ds.data = []);
+        channelsChart.update();
+      }
+      if (isPlaying && currentAction === 'wifi-channel-scan') {
+          // Restart scan with new params (channel specific)
+          const action = 'wifi-channel-scan';
+          const saved = loadSavedBTDevice();
+          const macaddy = (saved && saved.mac) ? saved.mac : "";
+          const band = wifiBand?.value || '2.4';
+          const chan = (wifiChan?.value || 'all');
+          const params = { band, channel: (chan === 'all' ? 0 : parseInt(chan)) };
+          
+          invoke<string>('run_action', { action, macaddy, params: JSON.stringify(params) })
+            .then(r => appendLog(`Switched channel to ${chan} => ${r}`))
+            .catch(e => error(String(e)));
+      }
+    });
+  }
 
   // update header from any saved device
   updateConnectedDeviceDisplay();

@@ -35,12 +35,7 @@ void handlenrftoolsmenu() {
         radio1.setDataRate(RF24_2MBPS);
         radio1.setAutoAck(false);
 
-        radio2.setPALevel(RF24_PA_MAX);
-        radio2.setDataRate(RF24_2MBPS);
-        radio2.setAutoAck(false);
-
         radio1.startListening();
-        radio2.startListening();
         runLoop(nrfscanner);
         break;
       case 1:
@@ -50,10 +45,6 @@ void handlenrftoolsmenu() {
         radio1.setPALevel(RF24_PA_MAX);
         radio1.setDataRate(RF24_2MBPS);
         radio1.setAutoAck(false);
-
-        radio2.setPALevel(RF24_PA_MAX);
-        radio2.setDataRate(RF24_2MBPS);
-        radio2.setAutoAck(false);
 
         //drawMenuPage(nrf::currentPage);
 

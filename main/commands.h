@@ -15,6 +15,9 @@ static const char CMD_BLE_SCAN_STOP[]  = "ble.scan.stop";
 // Wi‑Fi scan / sniffer
 static const char CMD_WIFI_SCAN_START[]    = "wifi.scan.start";
 static const char CMD_WIFI_SCAN_STOP[]     = "wifi.scan.stop";
+// visual-only command used by the app; firmware handles it identically to
+// a normal Wi‑Fi scan request.
+static const char CMD_WIFI_CHANNEL_SCAN[]  = "wifi.channel.scan";
 static const char CMD_WIFI_SNIFFER_START[] = "wifi.sniffer.start";
 static const char CMD_WIFI_SNIFFER_STOP[]  = "wifi.sniffer.stop";
 
@@ -75,6 +78,7 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_BLE_SCAN_STOP,
     CMD_WIFI_SCAN_START,
     CMD_WIFI_SCAN_STOP,
+    CMD_WIFI_CHANNEL_SCAN,
     CMD_WIFI_SNIFFER_START,
     CMD_WIFI_SNIFFER_STOP,
     CMD_NRF_SCAN_START,

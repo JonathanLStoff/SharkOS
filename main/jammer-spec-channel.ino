@@ -28,9 +28,7 @@ void updateRadios() {
   rf24_datarate_e rates[] = {RF24_250KBPS, RF24_1MBPS, RF24_2MBPS};
 
   radio1.setPALevel(paLevels[nrfspesPaLevelIndex]);
-  radio2.setPALevel(paLevels[nrfspesPaLevelIndex]);
   radio1.setDataRate(rates[nrfspesDataRateIndex]);
-  radio2.setDataRate(rates[nrfspesDataRateIndex]);
 }
 
 void jamChannelNow(int channel) {

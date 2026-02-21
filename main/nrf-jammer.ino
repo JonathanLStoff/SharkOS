@@ -50,9 +50,7 @@ void jamChannels(const char* label, int startCh, int endCh) {
       radio1.write(data1, sizeof(data1));
       delayMicroseconds(100);
 
-      radio2.setChannel(ch);
-      radio2.stopListening();
-      radio2.write(data2, sizeof(data2));
+      // radio2 removed — single nRF24 module
       delayMicroseconds(100);
     }
   }

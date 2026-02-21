@@ -92,74 +92,95 @@ struct rf_signal {
   int frequency;
   int rssi;
 };
+// SD Card via HSPI
 
 // Button GPIO pin assignments (defaults — adjust for your board if needed)
-#define BTN_UP     32
-#define BTN_DOWN   33
-#define BTN_LEFT   25
-#define BTN_RIGHT  26
-#define BTN_SELECT 27
-#define BTN_BACK    4
+#define BTN_UP     8
+#define BTN_DOWN   8
+#define BTN_LEFT   8
+#define BTN_RIGHT  8
+#define BTN_SELECT 8
+#define BTN_BACK   8
 
-// Hardware pin mapping (shared so every .ino sees the same values)
+// Hardware pin mapping (Corrected for ESP32-S3 N16R8)
 #define ANALOG_PIN 3
-#define WAVE_OUT_PIN 48
+#define WAVE_OUT_PIN 47 // Moved from 48 (hardwired to onboard RGB LED) [1, 2]
 
 #define I2C_SDA 8
 #define I2C_SCL 7
 
 // ==== IR Pins ====
-#define irsenderpin  17
-#define irrecivepin  18
+#define irsenderpin  1 // Relocated to avoid SPI/UART overlap
+#define irrecivepin  2 
 
 #define PN532_IRQ   6
 #define PN532_RESET 21
 
-// nRF24 via FSPI
-#define NRF_SCK   18
-#define NRF_MISO  16
-#define NRF_MOSI  17
+// Shared Hardware SPI Bus (FSPI/SPI2) for all radio modules [3, 4]
+#define SPI_SCK    12 // Hardware FSPICLK [3]
+#define SPI_MISO   13 // Hardware FSPIQ [3]
+#define SPI_MOSI   11 // Hardware FSPID [3]
 
-// SD Card via HSPI
-#define SD_SCK    14
-#define SD_MISO   39
-#define SD_MOSI   38
-#define SD_CS     37
+// nRF24 Module (Shared SPI)
+#define NRF_SCK    12
+#define NRF_MISO   13
+#define NRF_MOSI   11
+#define CE1_PIN    9 
+#define CSN1_PIN   10 // Hardware FSPICS0 [3]
 
-// RF24 Modules
-#define CE1_PIN   10
-#define CSN1_PIN  11
-
-#define CE2_PIN   12
-#define CSN2_PIN  13
-
-// CC1101_1 via custom SPI (HSPI-like)
+// CC1101_1 Module (Shared SPI)
 #define CC1101_1_SCK   12
 #define CC1101_1_MISO  13
 #define CC1101_1_MOSI  11
-#define CC1101_1_CS    10
-#define CC1101_1_GDO0  9
-#define CC1101_1_GDO2  14
+#define CC1101_1_CS    14
+#define CC1101_1_GDO0  15
+#define CC1101_1_GDO2  16
 
-// LoRa via custom SPI (FSPI-like)
-#define LORA_SCK   36
-#define LORA_MISO  37
-#define LORA_MOSI  35
-#define LORA_NSS   38
+// CC1101_2 Module (Shared SPI)
+#define CC1101_2_SCK   12
+#define CC1101_2_MISO  13
+#define CC1101_2_MOSI  11
+#define CC1101_2_CS    17
+#define CC1101_2_GDO0  18
+#define CC1101_2_GDO2  4
+
+// LoRa Module (Shared SPI)
+#define LORA_SCK   12
+#define LORA_MISO  13
+#define LORA_MOSI  11
+#define LORA_NSS   38 // Moved from 35-37 (Restricted Octal SPI PSRAM pins) [2, 5]
 #define LORA_RESET 39
 #define LORA_DIO0  40
 #define LORA_DIO1  41
 #define LORA_DIO2  42
 
-// CC1101_2 placeholder
-#define CC1101_2_SCK   69
-#define CC1101_2_MISO  69
-#define CC1101_2_MOSI  69
-#define CC1101_2_CS    69
-#define CC1101_2_GDO0  69
-#define CC1101_2_GDO2  69
-
 #define DISRUPT_DURATION 500
+
+// Radio batching configuration: buffer size (bytes) and idle timeout (ms)
+#ifndef RADIO_SIGNAL_BUFFER_SIZE
+#define RADIO_SIGNAL_BUFFER_SIZE 256
+#endif
+#ifndef RADIO_SIGNAL_IDLE_TIMEOUT_MS
+#define RADIO_SIGNAL_IDLE_TIMEOUT_MS 500
+#endif
+
+// --- protobuf data types shared across modules ---
+
+enum RadioModule { CC1101_1 = 0, CC1101_2 = 1, LORA = 2, NFC = 3, WIFI = 4, BLUETOOTH = 5, IR = 6 };
+
+struct RadioSignal {
+  uint64_t timestamp_ms;
+  RadioModule module;
+  float frequency_mhz;
+  int32_t rssi;
+  std::vector<uint8_t> payload;
+  String extra;
+  // helper defined in hardware-utils.ino
+  String toJson() const;
+};
+
+// forward declarations for utilities implemented elsewhere
+extern String base64_encode(const uint8_t *data, size_t len);
 
 // --- Shared globals (defined in one .ino only, declared extern here) ---
 #include <SPI.h>
@@ -186,6 +207,8 @@ extern int batteryPercent;
 //extern BleMouse mouse_ble;
 extern BLEServer *pServer;
 extern bool scanningRadio;
+extern int wifi_scan_channel; // 0 = all
+extern bool wifi_scan_5ghz;   // false = 2.4 GHz only
 extern float scanFrequency;
 extern String scanModulation;
 extern bool readingNfc;
@@ -201,12 +224,11 @@ extern int wifi_networkCount;
 extern bool wifi_showInfo;
 
 extern SPIClass RADIO_SPI;
-extern SPIClass SD_SPI;
-extern SPIClass CC1101_SPI;
-extern SPIClass LORA_SPI;
+// extern SPIClass CC1101_SPI; // Removed
+// LORA_SPI removed — LoRa now shares RADIO_SPI (both FSPI)
 
 extern RF24 radio1;
-extern RF24 radio2;
+// radio2 REMOVED — single nRF24 module only
 
 extern Module cc1101_module;
 extern CC1101 cc1101;
@@ -367,5 +389,19 @@ void bluetooth_send_response(const String &payload, const String &inReplyTo = ""
 extern bool firstCommandReceived;
 void indicate_command_success();
 void indicate_command_failure();
+
+// CC1101 / LoRa functions
+void cc1101Read();
+void cc1101Jam();
+void loraRead();
+void loraJam();
+
+// nRF24 functions
+void nrfscanner();
+
+// Restart logic
+void drawCancelledMessage();
+
+void runWifiBleScanTasks();
 
 #endif // SHARKOS_H

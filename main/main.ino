@@ -46,6 +46,7 @@
 
 */
 
+#include "Arduino.h"
 #include "globals.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
@@ -158,8 +159,13 @@ static void updateStatusLed() {
 void setup() {
   Serial.begin(115200);
   Serial.println("SharkOS starting (headless BLE mode)");
+  delay(4500);  // Allow USB CDC to enumerate before any heavy init
+  Serial.println("SharkOS passed the delay");
 
   crashDetected = wasCrashReset();
+  if (crashDetected) {
+    Serial.println("WARNING: Previous boot crashed (WDT/panic detected)");
+  }
 
   // Initialize device (was previously setup) — deviceSetup starts BLE advertising
   deviceSetup();

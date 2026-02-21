@@ -39,12 +39,7 @@ void scanAll() {
         hits1[ch]++;
       }
 
-      radio2.setChannel(ch);
-      delayMicroseconds(130);
-      if (radio2.testRPD()) {
-        r2++;
-        hits2[ch]++;
-      }
+      // radio2 removed — single nRF24 module
     }
 
     strength1[ch] = map(r1, 0, SAMPLES, 0, GRAPH_HEIGHT);

@@ -32,43 +32,50 @@ class blescanner_AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
   }
 };
 
+// void blescanner_scan() {
+//   blescanner_devices.clear();
+//   // CRITICAL: Do NOT call BLEDevice::init("") here!
+//   // It re-initializes the entire BLE stack, destroying the GATT server
+//   // ("SharkOS") and killing any active BLE connections. The BLE stack
+//   // is already initialized in deviceSetup().
+//   blescanner_pBLEScan = BLEDevice::getScan();
+//   blescanner_pBLEScan->setAdvertisedDeviceCallbacks(new blescanner_AdvertisedDeviceCallbacks(), false);
+//   blescanner_pBLEScan->setActiveScan(false); // passive scan to reduce interference with GATT
+//   blescanner_pBLEScan->start(3, false); // reduced from 5s to 3s to minimize GATT disruption
+// }
+
+// void blescanner() {
+//   static unsigned long lastPress = 0;
+
+//   if (millis() - lastPress > 200) {
+//     if (blescanner_isPressed(BTN_DOWN) && blescanner_selectedIndex < (int)blescanner_devices.size() - 1) {
+//       blescanner_selectedIndex++;
+//       blescanner_drawMenu();
+//       lastPress = millis();
+//     } else if (blescanner_isPressed(BTN_UP) && blescanner_selectedIndex > 0) {
+//       blescanner_selectedIndex--;
+//       blescanner_drawMenu();
+//       lastPress = millis();
+//     } else if (blescanner_isPressed(BTN_SELECT) && !blescanner_devices.empty()) {
+//       blescanner_drawDeviceDetails(blescanner_devices[blescanner_selectedIndex]);
+//       delay(3000);
+//       blescanner_drawMenu();
+//     } else if (blescanner_isPressed(BTN_BACK)) {
+//       u8g2.clearBuffer();
+//       u8g2.drawStr(0, 20, "Rescanning...");
+//       u8g2.sendBuffer();
+//       blescanner_scan();
+//       blescanner_selectedIndex = 0;
+//       blescanner_drawMenu();
+//       lastPress = millis();
+//     }
+//   }
+// }
+
+// Stub — BLE scanning disabled to protect the BLE GATT server connection.
+// The full scan code above is preserved for future re-enablement.
 void blescanner_scan() {
-  blescanner_devices.clear();
-  BLEDevice::init("");
-  blescanner_pBLEScan = BLEDevice::getScan();
-  blescanner_pBLEScan->setAdvertisedDeviceCallbacks(new blescanner_AdvertisedDeviceCallbacks(), false);
-  blescanner_pBLEScan->setActiveScan(true);
-  blescanner_pBLEScan->start(5, false); // scan for 5 seconds
+  Serial.println("blescanner_scan: DISABLED (BLE GATT priority)");
 }
-
-void blescanner() {
-  static unsigned long lastPress = 0;
-
-  if (millis() - lastPress > 200) {
-    if (blescanner_isPressed(BTN_DOWN) && blescanner_selectedIndex < (int)blescanner_devices.size() - 1) {
-      blescanner_selectedIndex++;
-      blescanner_drawMenu();
-      lastPress = millis();
-    } else if (blescanner_isPressed(BTN_UP) && blescanner_selectedIndex > 0) {
-      blescanner_selectedIndex--;
-      blescanner_drawMenu();
-      lastPress = millis();
-    } else if (blescanner_isPressed(BTN_SELECT) && !blescanner_devices.empty()) {
-      blescanner_drawDeviceDetails(blescanner_devices[blescanner_selectedIndex]);
-      delay(3000);
-      blescanner_drawMenu();
-    } else if (blescanner_isPressed(BTN_BACK)) {
-      u8g2.clearBuffer();
-      u8g2.drawStr(0, 20, "Rescanning...");
-      u8g2.sendBuffer();
-      blescanner_scan();
-      blescanner_selectedIndex = 0;
-      blescanner_drawMenu();
-      lastPress = millis();
-    }
-  }
-}
-
-
 
 

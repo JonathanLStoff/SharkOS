@@ -245,6 +245,11 @@ pub fn run() {
 
     info!("Starting Rust UI application");
     tauri::Builder::default()
+        .setup(|app| {
+            // initialize BT listener on startup so it can accept appended signals
+            crate::bt::listener::init(&app.handle());
+            Ok(())
+        })
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
@@ -256,7 +261,8 @@ pub fn run() {
             cell_scan_start,
             trigger_bluetooth_connection_screen,
             request_permissions,
-            run_action
+            run_action,
+            crate::bt::listener::bt_listener_append
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

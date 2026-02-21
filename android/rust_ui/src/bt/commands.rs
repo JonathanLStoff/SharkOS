@@ -32,6 +32,12 @@ fn make_bt_command_map() -> HashMap<String, String> {
         "wifi.scan.stop".into(),
         "Stop any ongoing Wi‑Fi scan. No params.".into(),
     );
+    // channel-scanning is just a visual variant of a normal Wi‑Fi scan; the
+    // firmware treats it identically but the UI plots results by channel/freq.
+    m.insert(
+        "wifi.channel.scan".into(),
+        "Start Wi‑Fi channel scan (same as wifi.scan.start). No extra params.".into(),
+    );
 
     // Wi‑Fi packet sniffer / promiscuous mode (based on packet-analyzer.ino)
     m.insert(

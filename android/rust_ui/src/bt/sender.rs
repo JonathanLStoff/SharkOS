@@ -25,6 +25,7 @@ fn translate_action_to_bt(action: &str) -> Option<&'static str> {
         ("wifi-scan-stop", "wifi.scan.stop"),
         ("wifi-sniffer", "wifi.sniffer.start"),
         ("wifi-sniffer-stop", "wifi.sniffer.stop"),
+        ("wifi-channel-scan", "wifi.channel.scan"),
         ("ble-scanner", "ble.scan.start"),
         ("ble-scan-stop", "ble.scan.stop"),
         ("nrf-scanner", "nrf.scan.start"),
@@ -49,6 +50,12 @@ fn translate_action_to_bt(action: &str) -> Option<&'static str> {
     .into_iter()
     .collect();
 
+    // debug: ensure our special actions exist
+    if map.contains_key("wifi-channel-scan") {
+        info!("translate_action_to_bt: wifi-channel-scan mapping present");
+    } else {
+        warn!("translate_action_to_bt: wifi-channel-scan mapping missing");
+    }
     map.get(action).copied()
 }
 
@@ -181,12 +188,18 @@ fn send_to_device_linux(_mac: &str, _bt_cmd: &str) -> Result<String, String> {
 pub fn send_action(action: &str, mac: &str, params: Option<JsonValue>) -> Result<String, String> {
     info!("send_action: action='{}' mac='{}' params={:?}", action, mac, params);
 
-    // Translate UI action -> BT command key
+    // Translate UI action -> BT command key. Accept either a UI action
+    // (e.g. "sub-ghz-scanner") or a canonical BT command (contains a '.')
     let bt_cmd = match translate_action_to_bt(action) {
         Some(c) => c.to_string(),
         None => {
-            warn!("Unknown UI action: {}", action);
-            return Err(format!("unknown_action:{}", action));
+            if action.contains('.') {
+                // caller already passed canonical BT command like "subghz.read.start"
+                action.to_string()
+            } else {
+                warn!("Unknown UI action: {}", action);
+                return Err(format!("unknown_action:{}", action));
+            }
         }
     };
 

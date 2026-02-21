@@ -3,6 +3,11 @@
 #include "commands.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <vector>
+#include <WiFi.h>
+#include <BLEDevice.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // Status / firmware externs used by the event subsystem
 extern void notifyStatus(const char *s);
@@ -10,6 +15,106 @@ extern int batteryPercent;
 extern bool paired;        // persistent auth flag (from HIZMOS_OLED_U8G2lib.ino)
 extern bool pairingMode;   // pairing mode enabled/disabled
 extern Preferences prefs;  // NVS storage (initialized during device setup)
+
+// Hooks provided by hardware-utils for polling transceivers and base64 encoding
+extern void runTransceiverPollTasks();
+extern String base64_encode(const uint8_t *data, size_t len);
+
+// Buffered signal representation used by events enqueueing
+struct BufferedSignal {
+  std::vector<uint8_t> payload;
+  float frequency_mhz;
+  int32_t rssi;
+  uint64_t timestamp_ms;
+};
+
+// Per-module buffers
+static const int RADIO_MODULE_COUNT = 8;
+static std::vector<BufferedSignal> radioBuffers[RADIO_MODULE_COUNT];
+static size_t radioBufferBytes[RADIO_MODULE_COUNT] = {0};
+static size_t radioBufferCount[RADIO_MODULE_COUNT] = {0};
+static unsigned long radioLastReceivedMs[RADIO_MODULE_COUNT] = {0};
+static const int RADIO_SIGNAL_EVENT_COUNT = 250; // flush threshold for event-counted modules (subghz)
+
+// Forward: flush buffer for given module index
+static void events_flush_radio_buffer(int moduleIdx);
+
+// Enqueue raw packet bytes from transceivers. Called from hardware-utils.
+// forward to hardware helper for immediate protobuf sends
+extern void hw_send_radio_signal_protobuf(int module, float frequency_mhz, int32_t rssi, const uint8_t* data, size_t len, const char* extra);
+
+void events_enqueue_radio_bytes(int module, const uint8_t* data, size_t len, float frequency_mhz, int32_t rssi) {
+  if (module < 0 || module >= RADIO_MODULE_COUNT) return;
+  BufferedSignal bs;
+  bs.payload.assign(data, data + len);
+  bs.frequency_mhz = frequency_mhz;
+  bs.rssi = rssi;
+  bs.timestamp_ms = (uint64_t)millis();
+  radioBuffers[module].push_back(std::move(bs));
+  radioBufferBytes[module] += len;
+  radioBufferCount[module] += 1;
+  radioLastReceivedMs[module] = millis();
+
+  // For sub-ghz modules (CC1101_1/2, LORA) flush when we reach event-count threshold
+  if (module == (int)CC1101_1 || module == (int)CC1101_2 || module == (int)LORA) {
+    if (radioBufferCount[module] >= RADIO_SIGNAL_EVENT_COUNT) {
+      events_flush_radio_buffer(module);
+    }
+  } else {
+    // For other modules flush on bytes threshold (legacy behavior)
+    if (radioBufferBytes[module] >= RADIO_SIGNAL_BUFFER_SIZE) {
+      events_flush_radio_buffer(module);
+    }
+  }
+}
+
+static void events_check_radio_idle_flush() {
+  unsigned long now = millis();
+  for (int i = 0; i < RADIO_MODULE_COUNT; ++i) {
+    if (radioBuffers[i].empty()) continue;
+    if (radioLastReceivedMs[i] == 0) continue;
+    if ((now - radioLastReceivedMs[i]) >= RADIO_SIGNAL_IDLE_TIMEOUT_MS) {
+      events_flush_radio_buffer(i);
+    }
+  }
+}
+
+static void events_flush_radio_buffer(int moduleIdx) {
+  if (moduleIdx < 0 || moduleIdx >= RADIO_MODULE_COUNT) return;
+  if (radioBuffers[moduleIdx].empty()) return;
+
+  // Build a lightweight JSON batch string to send over notifyStatus()
+  String out;
+  out.reserve(256);
+  out += "{\"type\":\"radio-batch\",\"module\":";
+  out += String(moduleIdx);
+  out += ",\"signals\":[";
+
+  bool first = true;
+  for (auto &bs : radioBuffers[moduleIdx]) {
+    if (!first) out += ',';
+    first = false;
+    String b64 = base64_encode(bs.payload.data(), bs.payload.size());
+    out += "{";
+    out += "\"timestamp_ms\":"; out += String(bs.timestamp_ms);
+    out += ",\"module\":"; out += String(moduleIdx);
+    out += ",\"frequency_mhz\":"; out += String(bs.frequency_mhz, 6);
+    out += ",\"rssi\":"; out += String(bs.rssi);
+    out += ",\"payload\":\""; out += b64; out += "\"";
+    out += "}";
+  }
+
+  out += "]}";
+
+  // send via notifyStatus which abstracts BLE/Serial transport
+  notifyStatus(out.c_str());
+
+  // clear buffer
+  radioBuffers[moduleIdx].clear();
+  radioBufferBytes[moduleIdx] = 0;
+  radioBufferCount[moduleIdx] = 0;
+  radioLastReceivedMs[moduleIdx] = 0;
+}
 
 // Simple ring-buffer queue for incoming BLE command strings
 static const int EVENT_QUEUE_SIZE = 12;
@@ -84,6 +189,50 @@ static bg_task_fn_t activeScanFn = nullptr;
 static unsigned long activeScanIntervalMs = 1000;
 static unsigned long activeScanLastMs = 0;
 static String activeScanName = String();
+// Active scan RTOS task handle (only one may exist at a time)
+static TaskHandle_t activeScanTask = NULL;
+
+// Task runner that executes the active scan kind in a loop until stopped.
+static void active_scan_task_runner(void *param) {
+  (void)param;
+  const TickType_t delayTick = pdMS_TO_TICKS(activeScanIntervalMs ? activeScanIntervalMs : 2000);
+  while (activeScan != SCAN_NONE) {
+    // perform one iteration according to activeScan
+    switch (activeScan) {
+      case SCAN_WIFI_SNIFFER: {
+        // WiFi scanning DISABLED in RTOS task context.
+        // WiFi.scanNetworks() activates the WiFi radio which conflicts
+        // with ADC2 pins (GPIO 11-18) used by SPI radios, and is not
+        // safe to call from a non-main task. WiFi scanning is handled
+        // by runWifiBleScanTasks() called from the main loop.
+        break;
+      }
+      case SCAN_BLE: {
+        // BLE scanning DISABLED in RTOS task context.
+        // BLEScan::start() is NOT thread-safe and conflicts with the
+        // BLE GATT server (connection drops, crashes, watchdog resets).
+        // BLE scanning must only be triggered from the main loop when
+        // no GATT client is connected.
+        break;
+      }
+      case SCAN_SUBGHZ: {
+        // NOTE: Do NOT call runTransceiverPollTasks() from this RTOS task!
+        // It accesses SPI buses which are not thread-safe. The main loop
+        // already calls runTransceiverPollTasks() via events_process_one().
+        // Just signal that subghz scanning is active; the main-loop poll
+        // handles the actual SPI communication.
+        break;
+      }
+      default:
+        break;
+    }
+    // delay between iterations
+    vTaskDelay(delayTick);
+  }
+  // cleanup and delete task
+  TaskHandle_t self = xTaskGetCurrentTaskHandle();
+  if (self) vTaskDelete(self);
+}
 
 static void stop_active_scan_internal();
 static void start_active_scan_internal(ActiveScanKind kind, bg_task_fn_t fn, unsigned long intervalMs, const char *name);
@@ -102,15 +251,24 @@ static void scan_loop_tick() {
 
 static void start_active_scan_internal(ActiveScanKind kind, bg_task_fn_t fn, unsigned long intervalMs, const char *name) {
   // stop any existing scan first
-  if (activeScan != SCAN_NONE) {
-    stop_active_scan_internal();
-  }
+  if (activeScan != SCAN_NONE) stop_active_scan_internal();
   activeScan = kind;
   activeScanFn = fn;
   activeScanIntervalMs = intervalMs;
   activeScanLastMs = 0;
   activeScanName = name ? String(name) : String();
   Serial.print("Started background scan: "); Serial.println(activeScanName);
+  // spawn RTOS task to run the scan loop
+  if (activeScanTask != NULL) {
+    vTaskDelete(activeScanTask);
+    activeScanTask = NULL;
+  }
+  BaseType_t res = xTaskCreate(active_scan_task_runner, "active_scan", 8 * 1024, NULL, 1, &activeScanTask);
+  if (res != pdPASS) {
+    Serial.println("Failed to create active_scan task");
+    activeScan = SCAN_NONE;
+    activeScanTask = NULL;
+  }
 }
 
 static void stop_active_scan_internal() {
@@ -126,10 +284,15 @@ static void stop_active_scan_internal() {
   activeScanIntervalMs = 1000;
   activeScanLastMs = 0;
   activeScanName = String();
+  // delete task if exists
+  if (activeScanTask != NULL) {
+    vTaskDelete(activeScanTask);
+    activeScanTask = NULL;
+  }
 }
 
 // Helper used by dispatch_command_key to start/stop by command key
-static void start_scan_for_key(const String &key) {
+static void start_scan_for_key(const String &key, const JsonObject *params = nullptr) {
   if (key == CMD_WIFI_SNIFFER_START) {
     start_active_scan_internal(SCAN_WIFI_SNIFFER, [](){
       // non-blocking WiFi sniffer: start async scan if not running, then
@@ -169,8 +332,10 @@ static void start_scan_for_key(const String &key) {
   }
 
   if (key == CMD_BLE_SCAN_START) {
+    // BLE scanning runs from the main loop scan_loop_tick(), NOT an RTOS task.
+    // This avoids thread-safety issues with the BLE GATT server.
     start_active_scan_internal(SCAN_BLE, [](){
-      // fire an async BLE scan and report collected devices (non-blocking)
+      // fire a BLE scan and report collected devices
       static unsigned long reportAt = 0;
       if (reportAt == 0) {
         blescanner_devices.clear();
@@ -222,19 +387,19 @@ static void start_scan_for_key(const String &key) {
 
   if (key == CMD_NRF_SCAN_START) {
     // lightweight non-blocking nRF sampling: sample a few channels per tick
+    // NOTE: SPI access is NOT thread-safe. This lambda runs from scan_loop_tick()
+    // in the main loop context, which is safe.
     start_active_scan_internal(SCAN_NRF, [](){
       static uint8_t ch = 0;
       // sample a single channel quickly (non-blocking) and send a small report
       radio1.setChannel(ch);
       delayMicroseconds(100);
       bool r1 = radio1.testRPD();
-      radio2.setChannel(ch);
-      delayMicroseconds(100);
-      bool r2 = radio2.testRPD();
+      // radio2 disabled (single nRF24 module)
       DynamicJsonDocument out(256);
       out["channel"] = ch;
       out["r1"] = r1;
-      out["r2"] = r2;
+      out["r2"] = false;
       String s; serializeJson(out, s);
       notifyStatus(s.c_str());
       ch = (ch + 1) % 126;
@@ -245,12 +410,15 @@ static void start_scan_for_key(const String &key) {
 
   if (key == CMD_OSCILLOSCOPE_START) {
     start_active_scan_internal(SCAN_OSCILLOSCOPE, [](){
+      // NOTE: GPIO 3 (ANALOG_PIN) is a strapping pin. analogRead() is safe
+      // after boot but we guard with a try to avoid crashes if pin is
+      // misconfigured.
       int raw = analogRead(ANALOG_PIN);
       DynamicJsonDocument out(128);
       out["analog"] = raw;
       String s; serializeJson(out, s);
       notifyStatus(s.c_str());
-    }, 100, "oscilloscope");
+    }, 200, "oscilloscope"); // slowed from 100ms to 200ms to reduce load
     bluetooth_send_response_internal("oscilloscope:started");
     return;
   }
@@ -487,38 +655,66 @@ void handleBLECommand(const String &jsonCmd) {
 // context and may call existing functions or set flags.
 static void dispatch_command_key(const String &key, const JsonObject *params = nullptr) {
   // BLE scanner
-  if (key == CMD_BLE_SCAN_START) { start_scan_for_key(String(CMD_BLE_SCAN_START)); return; }
+  if (key == CMD_BLE_SCAN_START) { start_scan_for_key(String(CMD_BLE_SCAN_START), params); return; }
   if (key == CMD_BLE_SCAN_STOP)  { stop_scan_for_key(String(CMD_BLE_SCAN_STOP)); return; }
 
   // Wi‑Fi scan / sniffer
-  if (key == CMD_WIFI_SCAN_START)    { (void)WiFi.scanNetworks(true); bluetooth_send_response_internal("wifi.scan:started"); return; }
-  if (key == CMD_WIFI_SCAN_STOP)     { bluetooth_send_response_internal("wifi.scan:stopped"); return; }
-  if (key == CMD_WIFI_SNIFFER_START) { start_scan_for_key(String(CMD_WIFI_SNIFFER_START)); return; }
+  if (key == CMD_WIFI_SCAN_START || key == CMD_WIFI_CHANNEL_SCAN) {
+        // channel-scan is exactly the same operation on the device side;
+        // the UI decides how to plot the results.
+        
+        // Parse optional parameters from run_action()
+        wifi_scan_channel = 0;
+        wifi_scan_5ghz = false;
+        if (params) {
+          if (params->containsKey("channel")) {
+             int c = (*params)["channel"].as<int>();
+             if (c > 0) wifi_scan_channel = c;
+          }
+          if (params->containsKey("band")) {
+            // "2.4" or "5"
+            String b = (*params)["band"].as<String>();
+            if (b == "5") wifi_scan_5ghz = true;
+          }
+        }
+        
+        // Mark as scanning so runWifiBleScanTasks picks it up
+        scanningRadio = true;
+        scanModulation = "WIFI";
+
+        // trigger immediate scan (sync) to ensure user sees results quickly?
+        // Or rely on background task. Background task is better.
+        // runWifiBleScanTasks() runs every 2s.
+        bluetooth_send_response_internal("wifi.scan:started");
+        return;
+    }
+    if (key == CMD_WIFI_SCAN_STOP)     { bluetooth_send_response_internal("wifi.scan:stopped"); return; }
+  if (key == CMD_WIFI_SNIFFER_START) { start_scan_for_key(String(CMD_WIFI_SNIFFER_START), params); return; }
   if (key == CMD_WIFI_SNIFFER_STOP)  { stop_scan_for_key(String(CMD_WIFI_SNIFFER_STOP)); return; }
 
   // nRF (2.4GHz)
-  if (key == CMD_NRF_SCAN_START) { start_scan_for_key(String(CMD_NRF_SCAN_START)); return; }
+  if (key == CMD_NRF_SCAN_START) { start_scan_for_key(String(CMD_NRF_SCAN_START), params); return; }
   if (key == CMD_NRF_SCAN_STOP)  { stop_scan_for_key(String(CMD_NRF_SCAN_STOP)); return; }
 
   // Sub‑GHz (CC1101/LoRa)
-  if (key == CMD_SUBGHZ_READ_START) { start_scan_for_key(String(CMD_SUBGHZ_READ_START)); return; }
+  if (key == CMD_SUBGHZ_READ_START) { start_scan_for_key(String(CMD_SUBGHZ_READ_START), params); return; }
   if (key == CMD_SUBGHZ_READ_STOP)  { stop_scan_for_key(String(CMD_SUBGHZ_READ_STOP)); return; }
 
   // Oscilloscope / ADC
-  if (key == CMD_OSCILLOSCOPE_START) { start_scan_for_key(String(CMD_OSCILLOSCOPE_START)); return; }
+  if (key == CMD_OSCILLOSCOPE_START) { start_scan_for_key(String(CMD_OSCILLOSCOPE_START), params); return; }
   if (key == CMD_OSCILLOSCOPE_STOP)  { stop_scan_for_key(String(CMD_OSCILLOSCOPE_STOP)); return; }
 
   // I2C scanner
   if (key == CMD_I2C_SCAN_ONCE)  { i2cScan(); bluetooth_send_response_internal("i2c.scan:done"); return; }
-  if (key == CMD_I2C_SCAN_START) { start_scan_for_key(String(CMD_I2C_SCAN_START)); return; }
+  if (key == CMD_I2C_SCAN_START) { start_scan_for_key(String(CMD_I2C_SCAN_START), params); return; }
   if (key == CMD_I2C_SCAN_STOP)  { stop_scan_for_key(String(CMD_I2C_SCAN_STOP)); return; }
 
   // NFC polling
-  if (key == CMD_NFC_POLL_START) { start_scan_for_key(String(CMD_NFC_POLL_START)); return; }
+  if (key == CMD_NFC_POLL_START) { start_scan_for_key(String(CMD_NFC_POLL_START), params); return; }
   if (key == CMD_NFC_POLL_STOP)  { stop_scan_for_key(String(CMD_NFC_POLL_STOP)); return; }
 
   // Sensor streaming
-  if (key == CMD_SENSOR_STREAM_START) { start_scan_for_key(String(CMD_SENSOR_STREAM_START)); return; }
+  if (key == CMD_SENSOR_STREAM_START) { start_scan_for_key(String(CMD_SENSOR_STREAM_START), params); return; }
   if (key == CMD_SENSOR_STREAM_STOP)  { stop_scan_for_key(String(CMD_SENSOR_STREAM_STOP)); return; }
 
   // Cellular / cell-scan (not implemented)
@@ -554,7 +750,23 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
 
 void events_process_one() {
   // Run any active background scan task (non-blocking tick)
+  // scan_loop_tick runs the scan lambda from main-loop context (thread-safe)
   scan_loop_tick();
+
+  // Poll transceivers to perform non-blocking reads and enqueue packets
+  // Only poll if no RTOS scan task is running (avoid concurrent SPI access)
+  if (activeScanTask == NULL) {
+    runTransceiverPollTasks();
+  }
+
+  // If WiFi scanning was requested via command, run it from main loop
+  // (NOT from RTOS task, to avoid ADC2/SPI conflicts)
+  if (scanningRadio && scanModulation == "WIFI") {
+    runWifiBleScanTasks();
+  }
+
+  // Check if any radio buffers should be flushed due to idle timeout
+  events_check_radio_idle_flush();
 
   if (eventCount == 0) return;
   String raw = events_dequeue();
@@ -662,7 +874,7 @@ void events_process_one() {
         // Allow start/stop control for background scans here
         String k = String(key);
         if (k == String(CMD_WIFI_SNIFFER_START) || k == String(CMD_BLE_SCAN_START) || k == String(CMD_NRF_SCAN_START) || k == String(CMD_SUBGHZ_READ_START) || k == String(CMD_OSCILLOSCOPE_START) || k == String(CMD_I2C_SCAN_START) || k == String(CMD_NFC_POLL_START) || k == String(CMD_SENSOR_STREAM_START)) {
-          start_scan_for_key(k);
+          start_scan_for_key(k, &params);
           return;
         }
         if (k == String(CMD_WIFI_SNIFFER_STOP) || k == String(CMD_BLE_SCAN_STOP) || k == String(CMD_NRF_SCAN_STOP) || k == String(CMD_SUBGHZ_READ_STOP) || k == String(CMD_OSCILLOSCOPE_STOP) || k == String(CMD_I2C_SCAN_STOP) || k == String(CMD_NFC_POLL_STOP) || k == String(CMD_SENSOR_STREAM_STOP)) {
@@ -683,7 +895,7 @@ void events_process_one() {
     if (trimmed == String(SHARKOS_BT_COMMANDS[i])) {
       // translate plain-key starts/stops into scan manager control too
       if (trimmed == String(CMD_WIFI_SNIFFER_START) || trimmed == String(CMD_BLE_SCAN_START) || trimmed == String(CMD_NRF_SCAN_START) || trimmed == String(CMD_SUBGHZ_READ_START) || trimmed == String(CMD_OSCILLOSCOPE_START) || trimmed == String(CMD_I2C_SCAN_START) || trimmed == String(CMD_NFC_POLL_START) || trimmed == String(CMD_SENSOR_STREAM_START)) {
-        start_scan_for_key(trimmed);
+        start_scan_for_key(trimmed, nullptr);
         return;
       }
       if (trimmed == String(CMD_WIFI_SNIFFER_STOP) || trimmed == String(CMD_BLE_SCAN_STOP) || trimmed == String(CMD_NRF_SCAN_STOP) || trimmed == String(CMD_SUBGHZ_READ_STOP) || trimmed == String(CMD_OSCILLOSCOPE_STOP) || trimmed == String(CMD_I2C_SCAN_STOP) || trimmed == String(CMD_NFC_POLL_STOP) || trimmed == String(CMD_SENSOR_STREAM_STOP)) {

@@ -1,36 +1,20 @@
 #include "globals.h"
 
 void checksysdevices() {
-
-
-  String radio1_state = "error";
-  String radio2_state = "error";
-  String sd_state     = "error";
+  // String radio1_state = "error"; // removed to save heap
+  Serial.println("checksysdevices: entering");
 
   // ----- Init radio1 -----
+  Serial.println("checksysdevices: calling radio1.begin(&RADIO_SPI)");
   if (radio1.begin(&RADIO_SPI)) {
-    radio1_state = "work";
-    
-    
+    // radio1_state = "work";
+    Serial.println("checksysdevices: radio1 OK");
+  } else {
+    Serial.println("checksysdevices: radio1 FAIL");
   }
 
-  // ----- Init radio2 -----
-  if (radio2.begin(&RADIO_SPI)) {
-    radio2_state = "work";
-   
-    
-  }
-
-  // ----- Init SD Card -----
-  // if (SD.begin(SD_CS, SD_SPI)) {
-  //   sd_state = "work";
-  //   sdOK = true;
-  //   setColor(0,255,0);
-  // } else {
-  //   sd_state = "error";
-  //   sdOK = false;
-  // }
-
+  // radio2 disabled...
+  Serial.println("checksysdevices: finished");
 }
 
 // Minimal stubs for optional/disabled modules so the core firmware can
