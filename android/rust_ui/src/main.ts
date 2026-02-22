@@ -3,6 +3,42 @@ import { listen } from '@tauri-apps/api/event';
 import Chart from 'chart.js/auto';
 import { warn, debug, trace, info, error } from '@tauri-apps/plugin-log';
 
+import { currentMonitor } from '@tauri-apps/api/window';
+// `currentMonitor()` returns a Promise; we store its result when it arrives so
+// other code (and our screenSize helper) can use the actual monitor
+// dimensions later.  When the promise resolves we also update the
+// screenSize value via a small helper.
+let monitor: any = null;
+
+// mutable screenSize object so we can recalc when monitor info becomes
+// available.  For callers we expose a simple getter function below that
+// always returns the current value.
+let screenSize = (function calculateSize() {
+  // prefer monitor info when it has resolved
+  if (monitor && monitor.size && typeof monitor.size.width === 'number' && typeof monitor.size.height === 'number') {
+    return { width: Math.floor(monitor.size.width), height: Math.floor(monitor.size.height) };
+  }
+  try {
+    if (window.screen && typeof window.screen.width === 'number') {
+      return { width: Math.floor(window.screen.width), height: Math.floor(window.screen.height) };
+    }
+  } catch (e) {
+    // defensive: fall through to other viewport options
+  }
+  if (window.visualViewport) {
+    return { width: Math.floor(window.visualViewport.width), height: Math.floor(window.visualViewport.height) };
+  }
+  return { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
+})();
+
+function updateScreenSizeFromMonitor() {
+  if (monitor && monitor.size && typeof monitor.size.width === 'number' && typeof monitor.size.height === 'number') {
+    screenSize = { width: Math.floor(monitor.size.width), height: Math.floor(monitor.size.height) };
+  }
+}
+
+currentMonitor().then(m => { monitor = m; updateScreenSizeFromMonitor(); }).catch(() => { monitor = null; });
+
 
 
 // Declare the AndroidBridge interface injected by MainActivity.kt
@@ -19,20 +55,7 @@ declare global {
 
 const menus = document.querySelectorAll<HTMLElement>('[id$="-menu"]');
 const charts = document.querySelectorAll<HTMLElement>(".chart-screen");
-// Use screen/visualViewport when available; fall back to documentElement size.
-const screenSize = (function() {
-  try {
-    if (window.screen && typeof window.screen.width === 'number') {
-      return { width: Math.floor(window.screen.width), height: Math.floor(window.screen.height) };
-    }
-  } catch (e) {
-    // defensive: fall through to other viewport options
-  }
-  if (window.visualViewport) {
-    return { width: Math.floor(window.visualViewport.width), height: Math.floor(window.visualViewport.height) };
-  }
-  return { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
-})();
+
 // <-- UI state & helpers -->
 function showView(id: string) {
   // Use the `hidden` attribute consistently so <section hidden> in HTML works.
@@ -268,9 +291,9 @@ function createChannelsChart() {
       data: { 
         datasets: [{
           label: 'Wi-Fi Networks',
-          data: [], // objects { x: channel, y: rssi (0-100 scale), ssid: 'name' }
-          // Changed from blue (--accent) to #DC2626 as requested
-          backgroundColor: '#DC2626',
+          data: [], // objects { x: channel, y: rssi, ssid: 'name', module?:number }
+          // per-bar colors will be populated dynamically when signals arrive
+          backgroundColor: [] as any[],
           borderWidth: 0,
           barPercentage: 0.8,
           categoryPercentage: 1.0
@@ -392,6 +415,7 @@ const recordedEvents: any[] = [];
 let simUpdateId: number | null = null;
 
 function setPlaying(val: boolean) {
+  const wasPlaying = isPlaying;
   isPlaying = val;
   const playBtn = document.getElementById('playBtn') as HTMLButtonElement | null;
   const stopBtn = document.getElementById('stopBtn') as HTMLButtonElement | null;
@@ -412,6 +436,9 @@ function setPlaying(val: boolean) {
   // start/stop commands so the backend/device knows which radio to control.
   (async () => {
     try {
+      // Ignore repeated state sets to avoid accidental duplicate stop/start.
+      if (wasPlaying === isPlaying) return;
+
       const action = currentAction;
       if (action !== 'sub-ghz-scanner') return;
 
@@ -429,7 +456,7 @@ function setPlaying(val: boolean) {
 
       // Read modulation choices
       const m1 = (mod1el && mod1el.value) ? mod1el.value : 'OOK';
-      const m2 = (mod2el && mod2el.value) ? mod2el.value : 'OOK';
+      const m2 = (mod2el && mod2el.value) ? mod2el.value : '2-FSK';
 
       // LoRa forcing: if either side selects LoRa, force both to LoRa
       const loRaActive = (String(m1).toLowerCase() === 'lora' || String(m2).toLowerCase() === 'lora');
@@ -852,8 +879,14 @@ async function setup() {
          params = { band, channel: (chan === 'all' ? 0 : parseInt(chan)) };
       }
 
-      const result = await invoke<string>('run_action', { action, macaddy, params: params ? JSON.stringify(params) : null });
-      appendLog(`run_action(${action}, ${macaddy}) => ${result}`);
+      // Sub-GHz scanner is controlled by Play/Stop (per-radio start/stop)
+      // so opening this view should not send a generic run_action command.
+      if (action !== 'sub-ghz-scanner') {
+        const result = await invoke<string>('run_action', { action, macaddy, params: params ? JSON.stringify(params) : null });
+        appendLog(`run_action(${action}, ${macaddy}) => ${result}`);
+      } else {
+        appendLog('sub-ghz scanner ready: press Play to start both radios');
+      }
     } catch (e) {
       appendLog(`run_action(${action}) failed: ${String(e)}`);
     }
@@ -867,6 +900,9 @@ async function setup() {
       // wifi-channel-scan sends the BLE command above, so data arrives right away).
       if (action === 'wifi-channel-scan' || action === 'wifi-scan' || action === 'wifi-scanner'
           || action === 'ble-scanner' || action === 'nrf-scanner' || action === 'nrf-disruptor') {
+        setPlaying(true);
+      }
+      if (action === 'sub-ghz-scanner') {
         setPlaying(true);
       }
     } else {
@@ -920,6 +956,9 @@ async function setup() {
   // modality change listener for LoRa enforcement & defaults
   const mod1el = document.getElementById('subghzModSelect1') as HTMLSelectElement | null;
   const mod2el = document.getElementById('subghzModSelect2') as HTMLSelectElement | null;
+  // Default modulation profile for scanner start: radio-1 OOK, radio-2 2-FSK.
+  if (mod1el && !mod1el.value) mod1el.value = 'OOK';
+  if (mod2el && mod2el.value === 'OOK') mod2el.value = '2-FSK';
   function updateModState() {
     const m1 = mod1el?.value || '';
     const m2 = mod2el?.value || '';
@@ -1247,11 +1286,21 @@ function getBleChannel(freq: number): number | null {
           // Check if we already have this SSID on this channel to update it instead of adding redundant bars
           const dataArr = ds.data as any[];
           const existingIdx = dataArr.findIndex(d => d.x === channel && d.ssid === ssid);
-          
+          // choose color based on module (0=CC1101_1 purple,1=CC1101_2 red)
+          let barColor = '#DC2626';
+          if (s.module === 0) barColor = '#8C00FF';
+          else if (s.module === 1) barColor = '#DC2626';
+
           if (existingIdx >= 0) {
              dataArr[existingIdx].y = strength;
+             // update color as well
+             const bc = ds.backgroundColor as any[];
+             if (bc && bc.length > existingIdx) bc[existingIdx] = barColor;
           } else {
-             dataArr.push({ x: channel, y: strength, ssid: ssid });
+             dataArr.push({ x: channel, y: strength, ssid: ssid, module: s.module });
+             // append color slot
+             const bc = ds.backgroundColor as any[];
+             if (bc) bc.push(barColor);
           }
 
           // keep reasonable history? No, for bar chart we want current snapshot.
@@ -1422,7 +1471,7 @@ function getBleChannel(freq: number): number | null {
       // Just clear chart when filter changes? Or keep data but filtering happens on-ingest.
       // Better to clear old data that might be hidden now.
       if (channelsChart) {
-        channelsChart.data.datasets.forEach(ds => ds.data = []);
+        channelsChart.data.datasets.forEach(ds => { ds.data = []; if (Array.isArray(ds.backgroundColor)) (ds.backgroundColor as any[]).length = 0; });
         channelsChart.update();
       }
       if (isPlaying && currentAction === 'wifi-channel-scan') {

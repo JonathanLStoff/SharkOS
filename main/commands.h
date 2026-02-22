@@ -28,6 +28,10 @@ static const char CMD_NRF_SCAN_STOP[]  = "nrf.scan.stop";
 // Sub‑GHz (CC1101/LoRa)
 static const char CMD_SUBGHZ_READ_START[] = "subghz.read.start";
 static const char CMD_SUBGHZ_READ_STOP[]  = "subghz.read.stop";
+static const char CMD_SUBGHZ_SET_MOD_ONE[] = "subghz.set.mod.one"; // params: { modulation: string }
+static const char CMD_SUBGHZ_SET_MOD_TWO[] = "subghz.set.mod.two"; // params: { modulation: string }
+static const char CMD_SUBGHZ_SET_TOP_FREQ[] = "subghz.set.top.freq"; // params: { frequency: float }
+static const char CMD_SUBGHZ_SET_BOT_FREQ[] = "subghz.set.bot.freq"; // params: { frequency: float }
 static const char CMD_SUBGHZ_RECORD_START[] = "subghz.record.start";
 static const char CMD_SUBGHZ_RECORD_STOP[]  = "subghz.record.stop";
 static const char CMD_SUBGHZ_PLAYBACK_START[] = "subghz.playback.start";
@@ -86,6 +90,10 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_NRF_SCAN_STOP,
     CMD_SUBGHZ_READ_START,
     CMD_SUBGHZ_READ_STOP,
+    CMD_SUBGHZ_SET_MOD_ONE,
+    CMD_SUBGHZ_SET_MOD_TWO,
+    CMD_SUBGHZ_SET_TOP_FREQ,
+    CMD_SUBGHZ_SET_BOT_FREQ,
     CMD_SUBGHZ_RECORD_START,
     CMD_SUBGHZ_RECORD_STOP,
     CMD_SUBGHZ_PLAYBACK_START,

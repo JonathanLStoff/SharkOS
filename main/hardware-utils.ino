@@ -72,14 +72,45 @@ bool paired = false;           // persistent auth flag
 bool pairingMode = false;      // enabled after timeout if not paired
 volatile bool anyConnected = false; // updated in server callbacks
 
+// Modulation enum matching UI options (CC1101 only)
+// LoRa is handled by the separate LoRaTransceiver class, so it is *not*
+// represented here.
+// Enum is defined in globals.h
+
+ModulationType modulationFromString(const String &s) {
+  if (s == "OOK") return MOD_OOK;
+  if (s == "2-FSK") return MOD_2FSK;
+  if (s == "ASK") return MOD_ASK;
+  if (s == "GFSK") return MOD_GFSK;
+  if (s == "MSK") return MOD_MSK;
+  return MOD_UNKNOWN;
+}
+String modulationToString(ModulationType m) {
+  switch (m) {
+    case MOD_OOK: return "OOK";
+    case MOD_2FSK: return "2-FSK";
+    case MOD_ASK: return "ASK";
+    case MOD_GFSK: return "GFSK";
+    case MOD_MSK: return "MSK";
+    default: return "";
+  }
+}
+
 // State variables for commands
 bool scanningRadio = false;
 int wifi_scan_channel = 0; // 0 = all
 bool wifi_scan_5ghz = false; // standard is 2.4 only
 float scanFrequency = 433.0;
-String scanModulation = "OOK";
+std::vector<String> scanModulation = {"OOK"};
 bool readingNfc = false;
 bool sendingIr = false;
+
+static bool scanModulationContains(const char *value) {
+  for (const auto &item : scanModulation) {
+    if (item == String(value)) return true;
+  }
+  return false;
+}
 
 
 // Simple base64 encoder (sufficient for small payloads)
@@ -183,6 +214,49 @@ bool encode_radio_signal_pb(const RadioSignal &rs, std::vector<uint8_t> &out) {
   return true;
 }
 
+// Encodes the `.proto` `status` message fields into protobuf bytes.
+// Field mapping:
+// 1: is_scanning (varint bool)
+// 2: battery_percent (varint int32)
+// 3: cc1101_1_connected (varint bool)
+// 4: cc1101_2_connected (varint bool)
+// 5: lora_connected (varint bool)
+// 6: nfc_connected (varint bool)
+// 7: wifi_connected (varint bool)
+// 8: bluetooth_connected (varint bool)
+// 9: ir_connected (varint bool)
+// 10: serial_connected (varint bool)
+static bool encode_status_pb(bool is_scanning,
+                             int battery_percent,
+                             bool cc1101_1_connected,
+                             bool cc1101_2_connected,
+                             bool lora_connected,
+                             bool nfc_connected,
+                             bool wifi_connected,
+                             bool bluetooth_connected,
+                             bool ir_connected,
+                             bool serial_connected,
+                             std::vector<uint8_t> &out) {
+  out.clear();
+
+  int bp = battery_percent;
+  if (bp < 0) bp = 0;
+  if (bp > 100) bp = 100;
+
+  write_tag(out, 1, 0); write_varint(out, is_scanning ? 1 : 0);
+  write_tag(out, 2, 0); write_varint(out, (uint64_t)bp);
+  write_tag(out, 3, 0); write_varint(out, cc1101_1_connected ? 1 : 0);
+  write_tag(out, 4, 0); write_varint(out, cc1101_2_connected ? 1 : 0);
+  write_tag(out, 5, 0); write_varint(out, lora_connected ? 1 : 0);
+  write_tag(out, 6, 0); write_varint(out, nfc_connected ? 1 : 0);
+  write_tag(out, 7, 0); write_varint(out, wifi_connected ? 1 : 0);
+  write_tag(out, 8, 0); write_varint(out, bluetooth_connected ? 1 : 0);
+  write_tag(out, 9, 0); write_varint(out, ir_connected ? 1 : 0);
+  write_tag(out, 10, 0); write_varint(out, serial_connected ? 1 : 0);
+
+  return true;
+}
+
 // Framing: [0xAA 0x55][u16 le length][payload bytes]
 void send_protobuf_framed(const std::vector<uint8_t> &payload) {
   uint16_t len = (uint16_t)payload.size();
@@ -232,79 +306,36 @@ void hw_send_radio_signal_protobuf(int module, float frequency_mhz, int32_t rssi
   }
 }
 
+void hw_send_status_protobuf(bool is_scanning,
+                             int battery_percent,
+                             bool cc1101_1_connected,
+                             bool cc1101_2_connected,
+                             bool lora_connected,
+                             bool nfc_connected,
+                             bool wifi_connected,
+                             bool bluetooth_connected,
+                             bool ir_connected,
+                             bool serial_connected) {
+  std::vector<uint8_t> pb;
+  if (encode_status_pb(is_scanning,
+                       battery_percent,
+                       cc1101_1_connected,
+                       cc1101_2_connected,
+                       lora_connected,
+                       nfc_connected,
+                       wifi_connected,
+                       bluetooth_connected,
+                       ir_connected,
+                       serial_connected,
+                       pb)) {
+    send_protobuf_framed(pb);
+  }
+}
+
 // Forward declaration of event enqueue function implemented in events.ino
 extern void events_enqueue_radio_bytes(int module, const uint8_t* data, size_t len, float frequency_mhz, int32_t rssi);
 
-// --- Transceiver base class and simple implementations ---
-class Transceiver {
-public:
-  virtual bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") = 0;
-};
-
-class CC1101_1Transceiver : public Transceiver {
-public:
-  CC1101 *dev;
-  RadioModule moduleId;
-  CC1101_1Transceiver(CC1101 *d): dev(d), moduleId(CC1101_1) {}
-  bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
-    // enqueue raw bytes into events subsystem which will batch and notify
-    events_enqueue_radio_bytes((int)moduleId, payload.data(), payload.size(), freq_mhz, rssi);
-    return true;
-  }
-  // start/stop loop mode and polling
-  bool receiving = false;
-  void startReceiveLoop() { receiving = true; }
-  void stopReceiveLoop() { receiving = false; }
-  void poll() {
-    if (!receiving) return;
-    // Delegate to existing cc1101Read helper (non-blocking placeholder)
-    // cc1101Read() currently posts status; real implementations should
-    // call lower-level read APIs and then call events_enqueue_radio_bytes.
-    cc1101Read();
-  }
-};
-class CC1101_2Transceiver : public Transceiver {
-public:
-  CC1101 *dev;
-  RadioModule moduleId;
-  CC1101_2Transceiver(CC1101 *d): dev(d), moduleId(CC1101_2) {}
-  bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
-    events_enqueue_radio_bytes((int)moduleId, payload.data(), payload.size(), freq_mhz, rssi);
-    return true;
-  }
-  bool receiving = false;
-  void startReceiveLoop() { receiving = true; }
-  void stopReceiveLoop() { receiving = false; }
-  void poll() { if (!receiving) return; cc1101Read(); }
-};
-
-class LoRaTransceiver : public Transceiver {
-public:
-  SX1276 *dev;
-  LoRaTransceiver(SX1276 *d): dev(d) {}
-  bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
-    events_enqueue_radio_bytes((int)LORA, payload.data(), payload.size(), freq_mhz, rssi);
-    return true;
-  }
-  bool receiving = false;
-  void startReceiveLoop() { receiving = true; }
-  void stopReceiveLoop() { receiving = false; }
-  void poll() { if (!receiving) return; loraRead(); }
-};
-
-class NRF24Transceiver : public Transceiver {
-public:
-  RF24 *dev;
-  NRF24Transceiver(RF24 *d): dev(d) {}
-  bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
-    events_enqueue_radio_bytes((int)BLUETOOTH, payload.data(), payload.size(), freq_mhz, rssi);
-    return true;
-  }
-  bool receiving = false;
-  void startReceiveLoop() { receiving = true; }
-  void stopReceiveLoop() { receiving = false; }
-  void poll() { if (!receiving) return; nrfscanner(); }
-};
+#include "transceivers.h"
 
 // Global transceiver pointers — will be initialized after hardware objects exist
 CC1101_1Transceiver *cc1101Tx = nullptr;
@@ -327,11 +358,14 @@ void initTransceivers() {
 // IMPORTANT: This must only be called from the main loop context, never from
 // an RTOS task, to avoid concurrent SPI bus access.
 void runTransceiverPollTasks() {
-  if (cc1101Tx) cc1101Tx->poll();
-  if (cc1101Tx2) cc1101Tx2->poll();
+  if (cc1101Tx) {
+    cc1101Tx->poll();
+  }
+  if (cc1101Tx2) {
+    cc1101Tx2->poll();
+  }
   if (loraTx) loraTx->poll();
   if (nrf1Tx) nrf1Tx->poll();
-  // nrf2Tx disabled
   // NOTE: runWifiBleScanTasks() is NO LONGER called here automatically.
   // WiFi/BLE scanning is only triggered on-demand via BLE commands.
   // This prevents WiFi radio from activating on every loop and conflicting
@@ -350,7 +384,7 @@ void runWifiBleScanTasks() {
   // Only run WiFi scan when explicitly requested via BLE command.
   // WiFi radio activation conflicts with ADC2 pins (GPIO 11-18) used by
   // nRF24 and CC1101 SPI buses. Never run this automatically.
-  if (scanningRadio && scanModulation == "WIFI") {
+  if (scanningRadio && scanModulationContains("WIFI")) {
       // If 5GHz mode is requested
       // if (wifi_scan_5ghz) {
       //     // Standard ESP32 is 2.4GHz only.

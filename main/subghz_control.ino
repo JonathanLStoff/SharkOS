@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+#include "transceivers.h"
 
 extern BLECharacteristic *pStatusChar;
 extern CC1101 cc1101;
@@ -24,9 +25,18 @@ void notifyStatus(const char *s) {
 }
 
 void cc1101Read() {
-  // Placeholder: non-destructive passive read not implemented; return example data
-  Serial.println("CC1101 read requested (placeholder)");
-  notifyStatus("cc1101:read:placeholder:OK");
+  bool didScan = false;
+  if (cc1101Tx) {
+    cc1101Tx->scan_range();
+    didScan = true;
+  }
+  if (cc1101Tx2) {
+    cc1101Tx2->scan_range();
+    didScan = true;
+  }
+  if (!didScan) {
+    notifyStatus("cc1101:read:no-transceiver");
+  }
 }
 
 // --- CC1101 connectivity checks -------------------------------------------------

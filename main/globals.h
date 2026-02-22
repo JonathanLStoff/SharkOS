@@ -210,7 +210,22 @@ extern bool scanningRadio;
 extern int wifi_scan_channel; // 0 = all
 extern bool wifi_scan_5ghz;   // false = 2.4 GHz only
 extern float scanFrequency;
-extern String scanModulation;
+// modulation enumeration used by CC1101 transceivers and UI commands
+// LoRa modulation is handled by the separate LoRaTransceiver class.
+enum ModulationType {
+    MOD_OOK,
+    MOD_2FSK,
+    MOD_ASK,
+    MOD_GFSK,
+    MOD_MSK,
+    MOD_UNKNOWN
+};
+
+extern std::vector<String> scanModulation;
+
+// helpers for converting between string and enum (implemented in hardware-utils)
+ModulationType modulationFromString(const String &s);
+String modulationToString(ModulationType m);
 extern bool readingNfc;
 extern Adafruit_PN532 nfc;
 extern bool sendingIr;
@@ -403,5 +418,15 @@ void nrfscanner();
 void drawCancelledMessage();
 
 void runWifiBleScanTasks();
+void hw_send_status_protobuf(bool is_scanning,
+                             int battery_percent,
+                             bool cc1101_1_connected,
+                             bool cc1101_2_connected,
+                             bool lora_connected,
+                             bool nfc_connected,
+                             bool wifi_connected,
+                             bool bluetooth_connected,
+                             bool ir_connected,
+                             bool serial_connected);
 
 #endif // SHARKOS_H
