@@ -163,7 +163,12 @@ bool encode_radio_signal_pb(const RadioSignal &rs, std::vector<uint8_t> &out) {
   write_fixed32(out, rs.frequency_mhz);
   // field 4: rssi (varint)
   write_tag(out, 4, 0);
-  write_varint(out, (uint64_t)(int64_t)rs.rssi);
+  // ZigZag-encode signed RSSI so negative dBm values are encoded compactly
+  {
+    int64_t rssi_signed = (int64_t)rs.rssi;
+    uint64_t zz = ((uint64_t)(rssi_signed << 1)) ^ (uint64_t)(rssi_signed >> 63);
+    write_varint(out, zz);
+  }
   // field 5: payload (length-delimited)
   if (!rs.payload.empty()) {
     write_tag(out, 5, 2);
@@ -215,7 +220,12 @@ void hw_send_radio_signal_protobuf(int module, float frequency_mhz, int32_t rssi
   rs.rssi = rssi;
   rs.payload.clear();
   if (data && len > 0) rs.payload.assign(data, data + len);
+
   rs.extra = extra ? String(extra) : String();
+  Serial.print("hw_send_radio_signal_protobuf: module="); Serial.print(module);
+  Serial.print(", frequency_mhz="); Serial.print(frequency_mhz);
+  Serial.print(", rssi="); Serial.print(rssi);
+  Serial.print(", extra="); Serial.println(rs.extra);
   std::vector<uint8_t> pb;
   if (encode_radio_signal_pb(rs, pb)) {
     send_protobuf_framed(pb);
@@ -342,71 +352,77 @@ void runWifiBleScanTasks() {
   // nRF24 and CC1101 SPI buses. Never run this automatically.
   if (scanningRadio && scanModulation == "WIFI") {
       // If 5GHz mode is requested
-      if (wifi_scan_5ghz) {
-          // Standard ESP32 is 2.4GHz only.
-          // SIMULATION: Generate fake 5GHz traffic so the UI can be verified.
-          // This maps 2.4GHz real networks to 5GHz channels for visualization testing.
+      // if (wifi_scan_5ghz) {
+      //     // Standard ESP32 is 2.4GHz only.
+      //     // SIMULATION: Generate fake 5GHz traffic so the UI can be verified.
+      //     // This maps 2.4GHz real networks to 5GHz channels for visualization testing.
           
-          int n = WiFi.scanNetworks(false, true, false, 300, wifi_scan_channel > 0 ? (wifi_scan_channel % 13) + 1 : 0);
-          if (n >= 0) {
-              for (int i = 0; i < n; ++i) {
-                  RadioSignal rs;
-                  rs.timestamp_ms = (uint64_t)millis();
-                  rs.module = WIFI;
+      //     int n = WiFi.scanNetworks(false, true, false, 300, wifi_scan_channel > 0 ? (wifi_scan_channel % 13) + 1 : 0);
+      //     if (n >= 0) {
+      //         for (int i = 0; i < n; ++i) {
+      //             RadioSignal rs;
+      //             rs.timestamp_ms = (uint64_t)millis();
+      //             rs.module = WIFI;
                   
-                  // FAKE FREQUENCY CALCULATION FOR 5GHz
-                  // If a specific channel was requested (e.g. 36), use it. 
-                  // Otherwise map the 2.4GHz index to a random 5GHz channel.
-                  int fakeChannel = wifi_scan_channel;
-                  if (fakeChannel <= 0) {
-                       // Map i to a valid 5GHz channel: 36, 40, 44, 48...
-                       fakeChannel = 36 + (i * 4); 
-                       if (fakeChannel > 165) fakeChannel = 36;
-                  }
+      //             // FAKE FREQUENCY CALCULATION FOR 5GHz
+      //             // If a specific channel was requested (e.g. 36), use it. 
+      //             // Otherwise map the 2.4GHz index to a random 5GHz channel.
+      //             int fakeChannel = wifi_scan_channel;
+      //             if (fakeChannel <= 0) {
+      //                  // Map i to a valid 5GHz channel: 36, 40, 44, 48...
+      //                  fakeChannel = 36 + (i * 4); 
+      //                  if (fakeChannel > 165) fakeChannel = 36;
+      //             }
                   
-                  // Base frequency for 5GHz channel N = 5000 + (N * 5)
-                  rs.frequency_mhz = 5000.0 + (fakeChannel * 5.0);
+      //             // Base frequency for 5GHz channel N = 5000 + (N * 5)
+      //             rs.frequency_mhz = 5000.0 + (fakeChannel * 5.0);
                   
-                  rs.rssi = WiFi.RSSI(i);
-                  String ssid = WiFi.SSID(i) + " (5G)";
-                  rs.extra = ssid;
-                  rs.payload.clear();
+      //             rs.rssi = WiFi.RSSI(i);
+      //             String ssid = WiFi.SSID(i) + " (5G)";
+      //             rs.extra = ssid;
+      //             rs.payload.clear();
                   
-                  std::vector<uint8_t> pb;
-                  if (encode_radio_signal_pb(rs, pb)) send_protobuf_framed(pb);
-                  events_enqueue_radio_bytes((int)rs.module, nullptr, 0, rs.frequency_mhz, rs.rssi);
-              }
-          }
-      } else {
-    // 2.4GHz Mode (Standard)
-    // Use the channel-specific overload if a channel is selected
-    // int16_t scanNetworks(bool async = false, bool show_hidden = false, bool passive = false, uint32_t max_ms_per_chan = 300, uint8_t channel = 0, const char* ssid=nullptr, const uint8_t* bssid=nullptr);
-    // If we only have the old signature available, we can't filter by channel easily. 
-    // Assuming standard ESP32 core > 2.0:
-    int n = WiFi.scanNetworks(false, true, false, 300, wifi_scan_channel);
+      //             std::vector<uint8_t> pb;
+      //             if (encode_radio_signal_pb(rs, pb)) send_protobuf_framed(pb);
+      //             events_enqueue_radio_bytes((int)rs.module, nullptr, 0, rs.frequency_mhz, rs.rssi);
+      //         }
+      //     }
+      // } else {
+      // 2.4GHz Mode (Standard)
+      // Use the channel-specific overload if a channel is selected
+      // int16_t scanNetworks(bool async = false, bool show_hidden = false, bool passive = false, uint32_t max_ms_per_chan = 300, uint8_t channel = 0, const char* ssid=nullptr, const uint8_t* bssid=nullptr);
+      // If we only have the old signature available, we can't filter by channel easily. 
+      // Assuming standard ESP32 core > 2.0:
+      int n = WiFi.scanNetworks(false, true, false, 300, wifi_scan_channel);
 
-    if (n >= 0) {
-      for (int i = 0; i < n; ++i) {
-        RadioSignal rs;
-      rs.timestamp_ms = (uint64_t)millis();
-      rs.module = WIFI;
-      // estimate frequency from channel: WiFi.channel(i) not available here,
-      // fallback to 2412 + 5*(chan-1) if we get channel via WiFi.channel(i)
-      int channel = WiFi.channel(i);
-      if (channel <= 0) rs.frequency_mhz = 2412.0;
-      else rs.frequency_mhz = 2412.0 + (channel - 1) * 5.0;
-      rs.rssi = WiFi.RSSI(i);
-      String ssid = WiFi.SSID(i);
-      rs.extra = ssid;
-      rs.payload.clear();
-      // Encode protobuf and send framed
-      std::vector<uint8_t> pb;
-      if (encode_radio_signal_pb(rs, pb)) send_protobuf_framed(pb);
-      // Enqueue minimal event for existing batching system (empty payload).
-      events_enqueue_radio_bytes((int)rs.module, nullptr, 0, rs.frequency_mhz, rs.rssi);
+      if (n >= 0) {
+        for (int i = 0; i < n; ++i) {
+          RadioSignal rs;
+          rs.timestamp_ms = (uint64_t)millis();
+          rs.module = WIFI;
+          // estimate frequency from channel: WiFi.channel(i) not available here,
+          // fallback to 2412 + 5*(chan-1) if we get channel via WiFi.channel(i)
+          int channel = WiFi.channel(i);
+          if (channel <= 0) rs.frequency_mhz = 2412.0;
+          else rs.frequency_mhz = 2412.0 + (channel - 1) * 5.0;
+          rs.rssi = WiFi.RSSI(i);
+          Serial.print("Found WiFi network: SSID="); Serial.print(WiFi.SSID(i)); Serial.print(" RSSI="); Serial.println(rs.rssi);
+          String ssid = WiFi.SSID(i);
+          String enc = wifi_encryptionType(WiFi.encryptionType(i));
+          rs.extra = ssid;
+          rs.payload.clear();
+          // Append encryption type string as bytes into the payload
+          for (size_t k = 0; k < enc.length(); ++k) {
+            rs.payload.push_back((uint8_t)enc.charAt(k));
+          }
+          // Encode protobuf and send framed
+          std::vector<uint8_t> pb;
+          if (encode_radio_signal_pb(rs, pb)) send_protobuf_framed(pb);
+          // Enqueue minimal event for existing batching system (empty payload).
+          events_enqueue_radio_bytes((int)rs.module, nullptr, 0, rs.frequency_mhz, rs.rssi);
+      }
     }
-   }
-  } // END if 5GHz else 2.4GHz
+    //} // END if 5GHz else 2.4GHz
  } // END if scanningRadio && WIFI
 
 

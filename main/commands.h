@@ -69,6 +69,7 @@ static const char CMD_IR_RECV_STOP[]  = "ir.recv.stop";
 static const char CMD_LIST_PAIRED_DEVICES[] = "list.paired.devices";
 static const char CMD_PAIR_SET[]             = "pair.set"; // params: { pin: string|int }
 static const char CMD_BATTERY_INFO[]         = "battery.info";
+static const char CMD_STATUS_INFO[]          = "status.info"; // one-shot status snapshot
 static const char CMD_STATUS_REPORT_START[]  = "status.reporting.start";
 static const char CMD_STATUS_REPORT_STOP[]   = "status.reporting.stop";
 
@@ -110,6 +111,7 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_LIST_PAIRED_DEVICES,
     CMD_PAIR_SET,
     CMD_BATTERY_INFO,
+    CMD_STATUS_INFO,
     CMD_STATUS_REPORT_START,
     CMD_STATUS_REPORT_STOP
 };

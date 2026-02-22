@@ -82,7 +82,11 @@ pub fn init(app: &AppHandle) {
                     match field {
                       1 => { obj.insert("timestamp_ms".into(), Value::from(val)); }
                       2 => { obj.insert("module".into(), Value::from(val as i64)); }
-                      4 => { obj.insert("rssi".into(), Value::from(val as i64)); }
+                      4 => {
+                        // ZigZag-decode RSSI (sint) encoded as varint
+                        let rssi = ((val >> 1) as i64) ^ -((val & 1) as i64);
+                        obj.insert("rssi".into(), Value::from(rssi));
+                      }
                       _ => {}
                     }
                   }
@@ -189,7 +193,11 @@ pub fn init(app: &AppHandle) {
                   match field {
                     1 => { obj.insert("timestamp_ms".into(), Value::from(val)); }
                     2 => { obj.insert("module".into(), Value::from(val as i64)); }
-                    4 => { obj.insert("rssi".into(), Value::from(val as i64)); }
+                    4 => {
+                      // ZigZag-decode RSSI (sint) encoded as varint
+                      let rssi = ((val >> 1) as i64) ^ -((val & 1) as i64);
+                      obj.insert("rssi".into(), Value::from(rssi));
+                    }
                     _ => {}
                   }
                 }
@@ -264,11 +272,12 @@ pub fn init(app: &AppHandle) {
              }
           }
 
-          let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-          let fname = format!("sharkos_radio_{}_{}.csv", module, now);
+          // use fixed filename per module so it gets overwritten each time
+          let fname = format!("sharkos_radio_{}.csv", module);
           path.push(fname);
 
-          match OpenOptions::new().create(true).append(true).open(&path) {
+          // truncate file on open so previous contents are removed
+          match OpenOptions::new().create(true).write(true).truncate(true).open(&path) {
             Ok(mut f) => {
               // write header
               if let Err(e) = writeln!(f, "timestamp_ms,module,frequency_mhz,rssi,payload_base64,extra") {

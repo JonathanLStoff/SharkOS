@@ -87,3 +87,56 @@ serve-dist:
 apk-logs:
 	@echo "Following device logcat for package com.sharkos..."
 	adb logcat | grep -E 'tauri|sharkos_lib'
+
+# Generate a compilation database for clangd/IntelliSense
+#
+# Running this target will invoke Arduino CLI to export all of the
+# compiler flags used for the current sketch.  clangd and many IDEs
+# will read the resulting compile_commands.json in the project root
+# and provide accurate include paths, macros, etc.
+#
+# Example:
+#   make compile_commands              # creates ./compile_commands.json
+# or if using a custom board/FQBN:
+#   make compile_commands FQBN=esp32:esp32:esp32dev
+#
+.PHONY: compile_commands
+compile_commands:
+	@echo "Exporting compile_commands.json via $(ARDUINO_CLI)"
+	@$(ARDUINO_CLI) compile --fqbn "$(FQBN)" main --export-compile-commands
+
+# Formatting / lint targets
+.PHONY: format lint
+format:
+	@echo "Formatting source files (HTML, TypeScript, Rust, C/INO)"
+	# JavaScript/TypeScript/HTML via Prettier
+	if command -v npx >/dev/null 2>&1; then \
+		npx prettier --write "**/*.{html,ts,tsx,js,css,json,md}"; \
+	else \
+		echo "npx not available, install Node.js to format web files"; \
+	fi
+	# Rust formatting
+	if command -v cargo >/dev/null 2>&1; then \
+		cargo fmt --all || true; \
+	else \
+		echo "cargo not available, skipping Rust format"; \
+	fi
+	# C/INO formatting using clang-format if installed
+	if command -v clang-format >/dev/null 2>&1; then \
+		clang-format -i $(find . -name "*.ino" -o -name "*.cpp" -o -name "*.h" 2>/dev/null); \
+	else \
+		echo "clang-format not installed, skipping C/C++ format"; \
+	fi
+
+lint:
+	@echo "Linting source files (TypeScript via ESLint, Rust via Clippy)"
+	if command -v npx >/dev/null 2>&1; then \
+		npx eslint "**/*.{ts,tsx}" --max-warnings=0 || true; \
+	else \
+		echo "npx not available, skipping JS/TS lint"; \
+	fi
+	if command -v cargo >/dev/null 2>&1; then \
+		cargo clippy --workspace -- -D warnings || true; \
+	else \
+		echo "cargo not available, skipping Rust lint"; \
+	fi

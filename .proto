@@ -15,3 +15,15 @@ message Command {
     uint64 timestamp_ms = 1;        // Arduino millis() or RTC
     string command = 2;             // command as string
 }
+message status {
+    bool is_scanning = 1;
+    int battery_percent = 2;
+    bool cc1101_1_connected = 3;
+    bool cc1101_2_connected = 4;
+    bool lora_connected = 5;
+    bool nfc_connected = 6;
+    bool wifi_connected = 7;
+    bool bluetooth_connected = 8;
+    bool ir_connected = 9;
+    bool serial_connected = 10;
+}

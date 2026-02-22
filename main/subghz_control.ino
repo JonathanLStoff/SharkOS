@@ -82,22 +82,22 @@ void handleOngoingTasks() {
   if (scanningRadio && millis() - lastScanTime > 2000) { // Send data every 2 seconds
     lastScanTime = millis();
     // Simulate scan results
-    DynamicJsonDocument doc(512);
-    doc["Response"]["RadioScanResults"][0]["frequency"] = scanFrequency;
-    doc["Response"]["RadioScanResults"][0]["rssi"] = random(-100, -50);
-    doc["Response"]["RadioScanResults"][0]["modulation"] = scanModulation;
-    // Add more simulated results
-    doc["Response"]["RadioScanResults"][1]["frequency"] = scanFrequency + 0.1;
-    doc["Response"]["RadioScanResults"][1]["rssi"] = random(-100, -50);
-    doc["Response"]["RadioScanResults"][1]["modulation"] = scanModulation;
+    // DynamicJsonDocument doc(512);
+    // doc["Response"]["RadioScanResults"][0]["frequency"] = scanFrequency;
+    // doc["Response"]["RadioScanResults"][0]["rssi"] = random(-100, -50);
+    // doc["Response"]["RadioScanResults"][0]["modulation"] = scanModulation;
+    // // Add more simulated results
+    // doc["Response"]["RadioScanResults"][1]["frequency"] = scanFrequency + 0.1;
+    // doc["Response"]["RadioScanResults"][1]["rssi"] = random(-100, -50);
+    // doc["Response"]["RadioScanResults"][1]["modulation"] = scanModulation;
 
-    String json;
-    serializeJson(doc, json);
-    if (pStatusChar) {
-      pStatusChar->setValue(json);
-      pStatusChar->notify();
-    }
-    Serial.println("Sent scan results: " + json);
+    // String json;
+    // serializeJson(doc, json);
+    // if (pStatusChar) {
+    //   pStatusChar->setValue(json);
+    //   pStatusChar->notify();
+    // }
+    // Serial.println("Sent scan results: " + json);
   }
 
   if (readingNfc) {

@@ -3,6 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import Chart from 'chart.js/auto';
 import { warn, debug, trace, info, error } from '@tauri-apps/plugin-log';
 
+
+
 // Declare the AndroidBridge interface injected by MainActivity.kt
 // This provides runtime permission checking/requesting on Android.
 declare global {
@@ -14,8 +16,23 @@ declare global {
   }
 }
 
+
 const menus = document.querySelectorAll<HTMLElement>('[id$="-menu"]');
 const charts = document.querySelectorAll<HTMLElement>(".chart-screen");
+// Use screen/visualViewport when available; fall back to documentElement size.
+const screenSize = (function() {
+  try {
+    if (window.screen && typeof window.screen.width === 'number') {
+      return { width: Math.floor(window.screen.width), height: Math.floor(window.screen.height) };
+    }
+  } catch (e) {
+    // defensive: fall through to other viewport options
+  }
+  if (window.visualViewport) {
+    return { width: Math.floor(window.visualViewport.width), height: Math.floor(window.visualViewport.height) };
+  }
+  return { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
+})();
 // <-- UI state & helpers -->
 function showView(id: string) {
   // Use the `hidden` attribute consistently so <section hidden> in HTML works.
@@ -170,7 +187,14 @@ function createSignalChart() {
     // Create a single, empty line dataset for stability (no initial bars/spikes)
     // Animation is disabled to avoid intermittent crashes on some devices.
     // @ts-ignore global Chart
-    const ch = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
+    // Ensure chart canvas uses exact app viewport size (avoid ~5px overshoot)
+    const cw = Math.max(0, screenSize.width - 5);
+    const chPx = Math.max(0, screenSize.height - 5);
+    c.style.width = `${cw}px`;
+    c.style.height = `${chPx}px`;
+    c.width = cw;
+    c.height = chPx;
+    const chart = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'line',
       data: {
         datasets: [
@@ -199,7 +223,7 @@ function createSignalChart() {
     });
     info(`createSignalChart: OK (${Math.round(performance.now() - start)}ms)`);
     try { attachZoomHandlers(c.parentElement as HTMLElement | null); } catch {}
-    return ch;
+    return chart;
   } catch (err) {
     error(`createSignalChart: error=${String(err)}`);
     appendLog(`signalChart error: ${String(err)}`);
@@ -231,12 +255,20 @@ function createChannelsChart() {
     // I will use a Bar chart with data points {x: channel, y: strength, ssid: string}.
 
     // @ts-ignore global Chart
-    const ch = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
+    // Ensure chart canvas uses exact app viewport size (avoid ~5px overshoot)
+    const cw = Math.max(0, screenSize.width - 5);
+    const chPx = Math.max(0, screenSize.height - 5);
+    info(`createChannelsChart: initializing with canvas size ${cw}x${chPx}`);
+    c.style.width = `${cw}px`;
+    c.style.height = `${chPx}px`;
+    c.width = cw;
+    c.height = chPx;
+    const chart = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'bar',
       data: { 
         datasets: [{
           label: 'Wi-Fi Networks',
-          data: [], // objects { x: channel, y: rssi+100 (0-100 scale), ssid: 'name' }
+          data: [], // objects { x: channel, y: rssi (0-100 scale), ssid: 'name' }
           // Changed from blue (--accent) to #DC2626 as requested
           backgroundColor: '#DC2626',
           borderWidth: 0,
@@ -260,9 +292,9 @@ function createChannelsChart() {
           },
           y: { 
             display: true, 
-            title: { display: true, text: 'Signal Strength (RSSI + 100)' },
-            min: 0,
-            max: 100
+            title: { display: true, text: 'Signal Strength (RSSI)' },
+            min: -100,
+            max: 0
           }
         },
         plugins: {
@@ -271,7 +303,7 @@ function createChannelsChart() {
             callbacks: {
               label: (ctx: any) => {
                 const raw = ctx.raw as any;
-                return `${raw.ssid || 'Unknown'}: ${raw.y - 100} dBm`;
+                return `${raw.ssid || 'Unknown'}: ${raw.y} dBm`;
               }
             }
           }
@@ -281,7 +313,7 @@ function createChannelsChart() {
 
     info(`createChannelsChart: OK (${Math.round(performance.now() - start)}ms)`);
     try { attachZoomHandlers(c.parentElement as HTMLElement | null); } catch {}
-    return ch;
+    return chart;
   } catch (err) {
     error(`createChannelsChart: error=${String(err)}`);
     appendLog(`channelsChart error: ${String(err)}`);
@@ -375,6 +407,92 @@ function setPlaying(val: boolean) {
     // ensure any leftover sim timer is cleared (defensive)
     if (simUpdateId) { window.clearInterval(simUpdateId); simUpdateId = null; }
   }
+
+  // When toggling play state for the Sub‑GHz scanner, send per-radio
+  // start/stop commands so the backend/device knows which radio to control.
+  (async () => {
+    try {
+      const action = currentAction;
+      if (action !== 'sub-ghz-scanner') return;
+
+      const macaddy = (loadSavedBTDevice()?.mac) || '';
+      const in1 = document.getElementById('subghzFreqInput1') as HTMLInputElement | null;
+      const in2 = document.getElementById('subghzFreqInput2') as HTMLInputElement | null;
+      const mod1el = document.getElementById('subghzModSelect1') as HTMLSelectElement | null;
+      const mod2el = document.getElementById('subghzModSelect2') as HTMLSelectElement | null;
+
+      // Read values (MHz) or fall back to sensible defaults
+      let f1 = in1 ? Number(in1.value || in1.defaultValue || '400') : NaN;
+      let f2 = in2 ? Number(in2.value || in2.defaultValue || '433') : NaN;
+      if (isNaN(f1)) f1 = 400;
+      if (isNaN(f2)) f2 = 433;
+
+      // Read modulation choices
+      const m1 = (mod1el && mod1el.value) ? mod1el.value : 'OOK';
+      const m2 = (mod2el && mod2el.value) ? mod2el.value : 'OOK';
+
+      // LoRa forcing: if either side selects LoRa, force both to LoRa
+      const loRaActive = (String(m1).toLowerCase() === 'lora' || String(m2).toLowerCase() === 'lora');
+      let modA = loRaActive ? 'LoRa' : m1;
+      let modB = loRaActive ? 'LoRa' : m2;
+
+      // If LoRa, clamp frequencies to 900-933 MHz
+      if (loRaActive) {
+        if (in1) { in1.value = String(Math.max(900, Math.min(933, Math.round(f1*10)/10))); }
+        if (in2) { in2.value = String(Math.max(900, Math.min(933, Math.round(f2*10)/10))); }
+        f1 = Math.max(900, Math.min(933, f1));
+        f2 = Math.max(900, Math.min(933, f2));
+        // disable second modulation selector when LoRa is active
+        if (mod2el) mod2el.disabled = true;
+      } else {
+        if (mod2el) mod2el.disabled = false;
+      }
+
+      // Enforce maximum span (MHz)
+      const MAX_SPAN_MHZ = 33;
+      if (Math.abs(f1 - f2) > MAX_SPAN_MHZ) {
+        // Keep f1 as the "high" value and adjust the other so span <= MAX_SPAN_MHZ
+        if (f1 > f2) {
+          f2 = f1 - MAX_SPAN_MHZ;
+          if (in2) in2.value = String(Math.round(f2*10)/10);
+        } else {
+          f1 = f2 - MAX_SPAN_MHZ;
+          if (in1) in1.value = String(Math.round(f1*10)/10);
+        }
+      }
+
+      // Build params helper
+      const makeParams = (freqMHz: number, modulation: string, radio: number) => ({ frequency_khz: Math.round(freqMHz * 1000), modulation, radio });
+
+      if (isPlaying) {
+        // start each radio separately (if inputs present)
+        if (in1) {
+          const params = makeParams(f1, modA, 1);
+          await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(params) });
+          appendLog(`[sub-ghz] radio-1 start -> freq=${f1}MHz mod=${modA}`);
+        }
+        if (in2) {
+          const params = makeParams(f2, modB, 2);
+          await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(params) });
+          appendLog(`[sub-ghz] radio-2 start -> freq=${f2}MHz mod=${modB}`);
+        }
+      } else {
+        // stop both radios (best-effort)
+        if (in1) {
+          const params = { radio: 1 };
+          await invoke<string>('run_action', { action: 'subghz.read.stop', macaddy, params: JSON.stringify(params) });
+          appendLog('[sub-ghz] radio-1 stop');
+        }
+        if (in2) {
+          const params = { radio: 2 };
+          await invoke<string>('run_action', { action: 'subghz.read.stop', macaddy, params: JSON.stringify(params) });
+          appendLog('[sub-ghz] radio-2 stop');
+        }
+      }
+    } catch (e) {
+      error('[sub-ghz] start/stop dispatch failed: ' + String(e));
+    }
+  })();
 }
 
 function setRecording(val: boolean) {
@@ -598,6 +716,13 @@ async function setup() {
   sensorChart = (function initSensor(){
     const ctx = document.getElementById('sensorChart') as HTMLCanvasElement | null;
     if (!ctx) return null;
+    // Ensure chart canvas uses exact app viewport size (avoid ~5px overshoot)
+    const cw = Math.max(0, screenSize.width - 5);
+    const ch = Math.max(0, screenSize.height - 5);
+    ctx.style.width = `${cw}px`;
+    ctx.style.height = `${ch}px`;
+    ctx.width = cw;
+    ctx.height = ch;
     return new Chart(ctx, {
       type: 'line',
       data: { labels: [], datasets: [
@@ -650,13 +775,41 @@ async function setup() {
     } catch (e) { /* noop */ }
   }, 200);
 
-  // main menu buttons
+  // main menu buttons — skip the dedicated `systemInfoBtn` so it can
+  // perform a single special-purpose Bluetooth command without navigating.
   document.querySelectorAll('.menu-btn').forEach(btn => {
+    if ((btn as HTMLElement).id === 'systemInfoBtn') return;
     btn.addEventListener('click', (ev) => {
         const action = (ev.currentTarget as HTMLElement).dataset.action || '';
         navigateToAction(action, false);
     });
   });
+  info('setup: main menu buttons wired');
+
+  // Wire the System Info button to send a one-shot status command over
+  // Bluetooth (no navigation or UI changes).
+  const sysBtn = document.getElementById('systemInfoBtn') as HTMLButtonElement | null;
+  if (sysBtn) {
+    sysBtn.addEventListener('click', async (ev) => {
+      try {
+        // Ensure permissions on Android before calling into Rust/Rust->Java
+        const ok = await requestBluetoothPermissions();
+        if (!ok) {
+          appendLog('System Info: Bluetooth permissions denied');
+          return;
+        }
+        appendLog('System Info: sending status request...');
+        // Use existing backend plumbing to send a one-shot status query.
+        // We now invoke `status.info` so the device can return the full status
+        // protobuf defined by our new schema. The UI will detect that and show
+        // the status screen.
+        const result = await invoke<string>('run_action', { action: 'status.info', macaddy: '' });
+        appendLog(`System Info: run_action result: ${result}`);
+      } catch (e) {
+        appendLog('System Info: error sending status: ' + String(e));
+      }
+    });
+  }
   info('setup: main menu buttons wired');
 
   // navigate to a menu action (reusable from click handlers and routing)
@@ -692,6 +845,10 @@ async function setup() {
       if (action === 'wifi-channel-scan') {
          const band = (document.getElementById('wifiBandSelect') as HTMLSelectElement)?.value || '2.4';
          const chan = (document.getElementById('wifiChannelSelect') as HTMLSelectElement)?.value || 'all';
+         // ensure chart range matches current band selection
+         if (band === '2.4') setChartRange('channels', 1, 14);
+         else setChartRange('channels', 36, 165);
+         
          params = { band, channel: (chan === 'all' ? 0 : parseInt(chan)) };
       }
 
@@ -735,38 +892,59 @@ async function setup() {
   recBtn?.addEventListener('click', () => { setRecording(!isRecording); });
 
   // wire sub‑GHz input + up/down controls
-  const freqInput = document.getElementById('subghzFreqInput') as HTMLInputElement | null;
-  document.getElementById('subghzFreqUp')?.addEventListener('click', () => { try { freqInput?.stepUp(); } catch(e){error(String(e));} });
-  document.getElementById('subghzFreqDown')?.addEventListener('click', () => { try { freqInput?.stepDown(); } catch(e){error(String(e));} });
-  freqInput?.addEventListener('keydown', (ev) => { if ((ev as KeyboardEvent).key === 'ArrowUp') { ev.preventDefault(); try{ freqInput.stepUp(); }catch{} } if ((ev as KeyboardEvent).key === 'ArrowDown') { ev.preventDefault(); try{ freqInput.stepDown(); }catch{} } });
+  const subFreqInput1 = document.getElementById('subghzFreqInput1') as HTMLInputElement | null;
+  const subFreqUp1 = document.getElementById('subghzFreqUp1') as HTMLButtonElement | null;
+  const subFreqDown1 = document.getElementById('subghzFreqDown1') as HTMLButtonElement | null;
+  const subFreqInput2 = document.getElementById('subghzFreqInput2') as HTMLInputElement | null;
+  const subFreqUp2 = document.getElementById('subghzFreqUp2') as HTMLButtonElement | null;
+  const subFreqDown2 = document.getElementById('subghzFreqDown2') as HTMLButtonElement | null;
+  if (subFreqUp1 && subFreqDown1 && subFreqInput1) {
+    const step = parseFloat(subFreqInput1.step || '0.1');
+    subFreqUp1.addEventListener('click', () => { try { subFreqInput1.stepUp(); } catch(e){error(String(e));} });
+    subFreqDown1.addEventListener('click', () => { try { subFreqInput1.stepDown(); } catch(e){error(String(e));} });
+    subFreqInput1.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowUp') {/* Line 670 omitted */}
+      if (ev.key === 'ArrowDown') {/* Line 671 omitted */}
+    });
+  }
+  if (subFreqUp2 && subFreqDown2 && subFreqInput2) {
+    const step = parseFloat(subFreqInput2.step || '0.1');
+    subFreqUp2.addEventListener('click', () => { try { subFreqInput2.stepUp(); } catch(e){error(String(e));} });
+    subFreqDown2.addEventListener('click', () => { try { subFreqInput2.stepDown(); } catch(e){error(String(e));} });
+    subFreqInput2.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowUp') {/* Line 670 omitted */}
+      if (ev.key === 'ArrowDown') {/* Line 671 omitted */}
+    });
+  }
 
+  // modality change listener for LoRa enforcement & defaults
+  const mod1el = document.getElementById('subghzModSelect1') as HTMLSelectElement | null;
+  const mod2el = document.getElementById('subghzModSelect2') as HTMLSelectElement | null;
+  function updateModState() {
+    const m1 = mod1el?.value || '';
+    const m2 = mod2el?.value || '';
+    const loRa = m1.toLowerCase() === 'lora' || m2.toLowerCase() === 'lora';
+    if (loRa) {
+      if (mod1el) mod1el.value = 'LoRa';
+      if (mod2el) { mod2el.value = 'LoRa'; mod2el.disabled = true; }
+      if (subFreqInput1) subFreqInput1.value = '933.0';
+      if (subFreqInput2) subFreqInput2.value = '900.0';
+    } else {
+      if (mod2el) mod2el.disabled = false;
+      // restore sensible defaults if we were previously in LoRa band
+      if (subFreqInput1 && parseFloat(subFreqInput1.value) > 900) subFreqInput1.value = '433.0';
+      if (subFreqInput2 && parseFloat(subFreqInput2.value) > 900) subFreqInput2.value = '400.0';
+    }
+  }
+  mod1el?.addEventListener('change', updateModState);
+  mod2el?.addEventListener('change', updateModState);
+  // enforce any initial constraints/defaults
+  updateModState();
+
+  // Wire play/stop header buttons to toggle playing state
   const playBtn = document.getElementById('playBtn') as HTMLButtonElement | null;
   const stopBtn = document.getElementById('stopBtn') as HTMLButtonElement | null;
-  playBtn?.addEventListener('click', async () => {
-    // If we're on the sub‑GHz scanner page, start the _device_ scan with
-    // the frequency from the input (do NOT auto-start when the page is opened).
-    if (currentAction === 'sub-ghz-scanner') {
-      const freqEl = document.getElementById('subghzFreqInput') as HTMLInputElement | null;
-      const raw = freqEl?.value || '433';
-      const mhz = Number(raw);
-      if (isNaN(mhz) || mhz < 300 || mhz > 1000) {
-        error('[sub-ghz] frequency out of range (300-1000 MHz)');
-        appendLog('[sub-ghz] invalid frequency — must be 300-1000 MHz');
-        return;
-      }
-      // send run_action with params (frequency in kHz)
-      const macaddy = (loadSavedBTDevice()?.mac) || '';
-      try {
-        const params = { frequency_khz: Math.round(mhz * 1000), modulation: 'OOK' };
-        const res = await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(params) });
-        appendLog(`[sub-ghz] start -> ${res}`);
-      } catch (e) {
-        appendLog(`[sub-ghz] failed to start scan: ${String(e)}`);
-      }
-    }
-
-    setPlaying(true);
-  });
+  playBtn?.addEventListener('click', () => { setPlaying(true); });
   stopBtn?.addEventListener('click', () => { setPlaying(false); });
 
   window.onpopstate = (ev) => {
@@ -808,7 +986,7 @@ async function setup() {
     try {
       if (channelsChart) {
         const idx = Math.floor(Math.random() * (channelsChart.data.labels?.length||16));
-        (channelsChart.data.datasets[0].data as number[])[idx] = Math.abs(r.signal_dbm) % 100;
+        (channelsChart.data.datasets[0].data as number[])[idx] = Math.abs(r.signal_dbm) % 100; // *10?
         channelsChart.update();
       }
     } catch (err) { error('cell-scan-result channelsChart update failed: '+String(err)); appendLog('channels chart error: '+String(err)); }
@@ -850,40 +1028,76 @@ async function setup() {
       }
       return val >>> 0; // unsigned
     }
+    // flag to detect whether this appears to be the status struct
+    let statusMsg = false;
     while (i < bytes.length) {
       const tag = readVarint();
       const field = tag >>> 3;
       const wire = tag & 0x7;
       if (wire === 0) { // varint
         const val = readVarint();
-        if (field === 1) obj.timestamp_ms = val;
-        else if (field === 2) obj.module = val;
-        else if (field === 4) {
-          // rssi is stored as a signed zigzag or raw int; ESP uses raw cast
-          // interpret as signed 32-bit
-          obj.rssi = (val | 0);
+        // check for known status fields first (they share field numbers with
+        // radio messages, so we detect by presence of multiple of them or
+        // values that clearly don't match the radio semantics).
+        if (field === 1 && (val === 0 || val === 1)) {
+          // could be timestamp or is_scanning; defer decision until later
+          obj.is_scanning = Boolean(val);
+          statusMsg = true;
+        } else if (field === 2) {
+          if (statusMsg) {
+            obj.battery_percent = val;
+          } else {
+            obj.module = val;
+          }
+        } else if (field === 3) {
+          obj.cc1101_1_connected = Boolean(val);
+          statusMsg = true;
+        } else if (field === 4) {
+          if (statusMsg) {
+            obj.cc1101_2_connected = Boolean(val);
+          } else {
+            // ZigZag-decode RSSI (sint) encoded as varint by firmware
+            obj.rssi = ((val >>> 1) ^ -(val & 1));
+          }
+        } else if (field === 5) { obj.lora_connected = Boolean(val); statusMsg = true; }
+        else if (field === 6) { obj.nfc_connected = Boolean(val); statusMsg = true; }
+        else if (field === 7) { obj.wifi_connected = Boolean(val); statusMsg = true; }
+        else if (field === 8) { obj.bluetooth_connected = Boolean(val); statusMsg = true; }
+        else if (field === 9) { obj.ir_connected = Boolean(val); statusMsg = true; }
+        else if (field === 10) { obj.serial_connected = Boolean(val); statusMsg = true; }
+        else {
+          // unknown varint field; skip or store generically
+          obj[`f${field}`] = val;
         }
       } else if (wire === 5) { // 32-bit fixed
         if (i + 4 <= bytes.length) {
           const dv = new DataView(bytes.buffer, bytes.byteOffset + i, 4);
           const f = dv.getFloat32(0, true); // little-endian
           i += 4;
-          if (field === 3) obj.frequency_mhz = f;
+          if (field === 3 && !statusMsg) obj.frequency_mhz = f;
+          else obj[`f${field}_32`] = f;
         } else break;
       } else if (wire === 2) { // length-delimited
         const len = readVarint();
         if (i + len <= bytes.length) {
           const slice = bytes.slice(i, i + len);
           i += len;
-          if (field === 5) {
+          if (field === 5 && !statusMsg) {
             obj.payload = btoa(String.fromCharCode(...slice));
-          } else if (field === 6) {
+          } else if (field === 6 && !statusMsg) {
             obj.extra = new TextDecoder().decode(slice);
+          } else {
+            // unknown string field
+            obj[`f${field}_str`] = new TextDecoder().decode(slice);
           }
         } else break;
       } else {
         break; // unknown wire type
       }
+    }
+    // if all we parsed were status fields, return that object
+    if (statusMsg && Object.keys(obj).length > 0) {
+      return obj;
     }
     return (Object.keys(obj).length > 0) ? obj : null;
   }
@@ -904,9 +1118,43 @@ function getBleChannel(freq: number): number | null {
   return null;
 }
 
+  // helper: display a status object in the newly added status screen
+  function showStatusObject(st: any) {
+    const content = document.getElementById('status-content');
+    if (!content) return;
+    // clear previous
+    content.innerHTML = '';
+    const addItem = (label: string, val: any) => {
+      const div = document.createElement('div');
+      div.style.minWidth = '120px';
+      div.style.padding = '8px';
+      div.style.background = 'var(--bg-panel)';
+      div.style.border = '1px solid rgba(255,255,255,0.05)';
+      div.style.borderRadius = '8px';
+      div.style.fontSize = '14px';
+      div.textContent = `${label}: ${val}`;
+      content.appendChild(div);
+    };
+    if (st.is_scanning !== undefined) addItem('Scanning', st.is_scanning ? 'yes' : 'no');
+    if (st.battery_percent !== undefined) addItem('Battery', st.battery_percent + '%');
+    if (st.cc1101_1_connected !== undefined) addItem('Radio1', st.cc1101_1_connected ? 'connected' : 'off');
+    if (st.cc1101_2_connected !== undefined) addItem('Radio2', st.cc1101_2_connected ? 'connected' : 'off');
+    if (st.lora_connected !== undefined) addItem('LoRa', st.lora_connected ? 'yes' : 'no');
+    if (st.nfc_connected !== undefined) addItem('NFC', st.nfc_connected ? 'yes' : 'no');
+    if (st.wifi_connected !== undefined) addItem('Wi-Fi', st.wifi_connected ? 'yes' : 'no');
+    if (st.bluetooth_connected !== undefined) addItem('Bluetooth', st.bluetooth_connected ? 'yes' : 'no');
+    if (st.ir_connected !== undefined) addItem('IR', st.ir_connected ? 'yes' : 'no');
+    if (st.serial_connected !== undefined) addItem('Serial', st.serial_connected ? 'yes' : 'no');
+    // switch view to status screen
+    showView('status-screen');
+    showChart('logs');
+    enableHeaderControls(true);
+  }
+
   // Unified handler for radio signal data – works whether data arrives via
   // the Tauri event bus or the window CustomEvent from handleRadioNotification.
   function handleRadioSignalData(raw: any) {
+    console.debug('[radio] raw payload', raw);
     const processSignal = (s: any) => {
       const ts = s.timestamp_ms ? new Date(s.timestamp_ms) : new Date();
       appendLog(`[RADIO] ${s.frequency_mhz ?? '?'} MHz rssi=${s.rssi ?? '?'} ${s.extra ? '('+s.extra+')' : ''}`);
@@ -930,8 +1178,16 @@ function getBleChannel(freq: number): number | null {
           let channel: number | null = null;
           let isBle = false;
 
+          // console.debug('[chart] processing signal:', s.module, s.frequency_mhz);
+
           if (currentAction === 'wifi-channel-scan' || s.module === 4 /* WIFI */) {
-             channel = getChannelFromFreq(s.frequency_mhz) || s.frequency_mhz; // fallback to raw
+             const mhz = Number(s.frequency_mhz);
+             channel = getChannelFromFreq(mhz);
+             if (channel === null) {
+               // console.debug('[wifi] dropping unmapped freq', s.frequency_mhz);
+               return;
+             }
+             // console.debug('[wifi] mapped freq', s.frequency_mhz, 'to channel', channel);
           } else if (currentAction === 'ble-scanner' || s.module === 5 /* BT */) {
              channel = getBleChannel(s.frequency_mhz);
              isBle = true;
@@ -941,11 +1197,11 @@ function getBleChannel(freq: number): number | null {
                return; 
              }
           } else {
-             // Fallback
+             // Fallback (non-wifi/ble) – number may be used directly
              channel = s.frequency_mhz; 
           }
 
-          if (channel === null) return;
+          if (channel === null) return; // catch any leftover nulls
 
           // If in Wi-Fi scan mode, perform active filtering based on header selections
           if (currentAction === 'wifi-channel-scan') {
@@ -962,11 +1218,32 @@ function getBleChannel(freq: number): number | null {
              if (chanSel !== 'all' && parseInt(chanSel) !== channel) return;
           }
 
-          // Bar chart: x=Channel, y=Signal Strength (normalized: -100dBm -> 0)
+          // Bar chart: x=Channel, y=Signal Strength (RSSI)
           // SSID stored in `ssid` property for tooltip
-          const strength = Math.max(0, (s.rssi ?? -100) + 100);
-          const ssid = s.extra || 'Unknown';
+          // Use RSSI directly for Y-axis since chart range is -100 to 0
+          const strength = s.rssi ?? -100;
+          // Build label: <extra> [payload-as-string]
+          let payloadStr = '';
+          if (s.payload) {
+            try {
+              if (typeof s.payload === 'string') {
+                const bin = atob(s.payload);
+                const arr = new Uint8Array(bin.length);
+                for (let ii = 0; ii < bin.length; ii++) arr[ii] = bin.charCodeAt(ii);
+                payloadStr = new TextDecoder().decode(arr);
+              } else if (Array.isArray(s.payload)) {
+                const arr = new Uint8Array(s.payload.length);
+                for (let ii = 0; ii < s.payload.length; ii++) arr[ii] = s.payload[ii];
+                payloadStr = new TextDecoder().decode(arr);
+              }
+            } catch (e) {
+              payloadStr = String(s.payload);
+            }
+          }
+          const ssid = `${s.extra || 'Unknown'} ${payloadStr ? '['+payloadStr+']' : ''}`;
           
+          console.debug('[chart] updating channel', channel, 'with ssid', ssid, 'strength', strength);
+
           // Check if we already have this SSID on this channel to update it instead of adding redundant bars
           const dataArr = ds.data as any[];
           const existingIdx = dataArr.findIndex(d => d.x === channel && d.ssid === ssid);
@@ -998,10 +1275,16 @@ function getBleChannel(freq: number): number | null {
     let r: any = raw;
     if (typeof raw === 'string') {
       r = decodeProtoPayload(raw);
+      console.debug('[radio] decoded payload', r);
       if (!r) {
         appendLog(`[RADIO] undecoded payload (${raw.length} chars)`);
         return;
       }
+    }
+    // if this looks like a status struct, show it and bail out
+    if (r && (r.battery_percent !== undefined || r.is_scanning !== undefined)) {
+      showStatusObject(r);
+      return;
     }
     if (r && r.type === 'radio-batch' && Array.isArray(r.signals)) {
       for (const s of r.signals) {

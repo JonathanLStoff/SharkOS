@@ -129,12 +129,12 @@ struct rf_signal {
 #define CSN1_PIN   10 // Hardware FSPICS0 [3]
 
 // CC1101_1 Module (Shared SPI)
-#define CC1101_1_SCK   12
-#define CC1101_1_MISO  13
-#define CC1101_1_MOSI  11
-#define CC1101_1_CS    14
-#define CC1101_1_GDO0  15
-#define CC1101_1_GDO2  16
+#define CC1101_1_SCK   12 // phys 5
+#define CC1101_1_MISO  13 // phys 7
+#define CC1101_1_MOSI  11 // phys 6
+#define CC1101_1_CS    14 // phys 4
+#define CC1101_1_GDO0  15 // phys 3
+#define CC1101_1_GDO2  16 // phys 8
 
 // CC1101_2 Module (Shared SPI)
 #define CC1101_2_SCK   12

@@ -1,0 +1,72 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../Library/Arduino15/packages/esp32/hardware/esp32/3.3.7/libraries"
+		},
+		{
+			"path": "../../../Documents/Arduino/libraries"
+		}
+	],
+	"settings": {
+		"rust-analyzer.cachePriming.enable": true,
+		"rust-analyzer.procMacro.enable": true,
+		"rust-analyzer.cargo.buildScripts.enable": true,
+		"rust-analyzer.cargo.target": "aarch64-apple-darwin",
+		"rust-analyzer.linkedProjects": [
+			"/Users/jonathanstoff/Desktop/Scripts/SharkOS/android/rust_ui/Cargo.toml"
+		],
+		"rust-analyzer.server.extraEnv": {
+			"RA_LOG": "error",
+			"JAVA_HOME": "/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home",
+			"ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+			"ANDROID_SDK_ROOT": "${env:HOME}/Library/Android/sdk",
+			"ANDROID_NDK_HOME": "${env:HOME}/Library/Android/sdk/ndk-bundle",
+			"PATH": "${env:PATH}:${env:HOME}/Library/Android/sdk/platform-tools:${env:HOME}/Library/Android/sdk/cmdline-tools/latest/bin:${env:HOME}/.cargo/bin:${env:HOME}/.sdkman/candidates/java/current/bin",
+			"CC": "/usr/bin/cc",
+			"LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+			"AR": "/opt/local/bin/ar",
+			"CXX": "/usr/bin/clang++",
+			"DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer",
+			"SDKROOT": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+		},
+		"rust-analyzer.cargo.extraEnv": {
+			"JAVA_17": "/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home",
+			"JAVA_HOME": "/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home",
+			"ANDROID_SDK_ROOT": "${env:HOME}/Library/Android/sdk",
+			"ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+			"ANDROID_NDK_HOME": "${env:HOME}/Library/Android/sdk/ndk-bundle",
+			"CC": "/usr/bin/cc",
+			"AR": "/opt/local/bin/ar",
+			"CXX": "/usr/bin/clang++",
+			"LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+			"DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer",
+			"PATH": "${env:PATH}:${env:HOME}/Library/Android/sdk/platform-tools:${env:HOME}/Library/Android/sdk/cmdline-tools/latest/bin:${env:HOME}/.cargo/bin:${env:HOME}/.sdkman/candidates/java/current/bin",
+			"SDKROOT": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+		},
+		"chat.tools.terminal.autoApprove": {
+			"adb": true,
+			"/^cd \\.\\./\\.\\. && make android-run$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npm run build": true,
+			"arduino-cli": true
+		},
+		"files.associations": {
+			"*.ino": "cpp"
+		},
+		"clangd.fallbackFlags": [
+			"-std=gnu++17",
+			"-x",
+			"c++",
+			"-DARDUINO",
+			"-I${workspaceFolder}",
+			"-I${workspaceFolder}/main",
+			"-I${workspaceFolder}/.vscode/arduino-stubs",
+			"-I${env:HOME}/.platformio/packages/framework-arduinoespressif32/cores/esp32"
+		]
+	}
+}

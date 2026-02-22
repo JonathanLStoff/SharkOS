@@ -183,6 +183,10 @@ fn make_bt_command_map() -> HashMap<String, String> {
         "Return current battery percentage / state. No params.".into(),
     );
     m.insert(
+        "status.info".into(),
+        "Return a single status snapshot (battery, uptime, connected modules). No params.".into(),
+    );
+    m.insert(
         "status.reporting.start".into(),
         "Begin periodic status reporting (battery, uptime, memory). Params: { interval_ms: int (default 5000) }".into(),
     );

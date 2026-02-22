@@ -30,7 +30,7 @@
       /* constrain app to viewport so chart pages fit the device */
       .app{height:100vh;width:100vw;max-width:none;margin:0 auto;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:0;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;}
       header{flex:0 0 auto}
-      header{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+      header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
       header h1{margin:0;font-size:20px;color:var(--accent)}
       .toolbar{margin-left:auto;display:flex;gap:8px}
       .btn{border:1px solid rgba(255,255,255,0.06);background:var(--card);color:var(--text);padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
@@ -123,12 +123,39 @@
           <button id="stopBtn" class="btn" title="Stop">■</button>
         </div>
         <!-- sub‑GHz header controls: moved here so they appear beside play/stop/record -->
-        <div id="subghz-header-controls" style="display:none;align-items:center;gap:8px;margin-left:12px">
-          <label style="color:var(--muted);font-size:13px;margin-right:6px">Frequency (MHz)</label>
-          <button id="subghzFreqDown" class="small-ctrl" aria-label="decrease frequency">−</button>
-          <input id="subghzFreqInput" type="number" min="300" max="1000" step="0.1" value="433.0" style="width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700;text-align:center" />
-          <button id="subghzFreqUp" class="small-ctrl" aria-label="increase frequency">+</button>
+        <div id="subghz-header-controls" style="display:none;flex-direction:column;gap:4px;margin-left:12px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <label style="color:var(--muted);font-size:13px;margin-right:6px">High</label>
+            <button id="subghzFreqDown1" class="small-ctrl" aria-label="decrease frequency">−</button>
+            <input id="subghzFreqInput1" type="number" min="300" max="1000" step="0.1" value="433.0" style="width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700;text-align:center" />
+            <button id="subghzFreqUp1" class="small-ctrl" aria-label="increase frequency">+</button>
+            <label style="color:var(--muted);font-size:13px;margin-right:6px">MHz</label>
+            <select id="subghzModSelect1" style="padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700">
+              <option value="OOK">OOK</option>
+              <option value="2-FSK">2-FSK</option>
+              <option value="ASK">ASK</option>
+              <option value="GFSK">GFSK</option>
+              <option value="MSK">MSK</option>
+              <option value="LoRa">LoRa</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label style="color:var(--muted);font-size:13px;margin-right:6px">Low</label>
+            <button id="subghzFreqDown2" class="small-ctrl" aria-label="decrease frequency">−</button>
+            <input id="subghzFreqInput2" type="number" min="300" max="1000" step="0.1" value="400.0" style="width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700;text-align:center" />
+            <button id="subghzFreqUp2" class="small-ctrl" aria-label="increase frequency">+</button>
+            <label style="color:var(--muted);font-size:13px;margin-right:6px">MHz</label>
+            <select id="subghzModSelect2" style="padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700">
+              <option value="2-FSK">2-FSK</option> 
+              <option value="OOK">OOK</option>
+              <option value="4-FSK">4-FSK</option>
+              <option value="GFSK">GFSK</option>
+              <option value="ASK">ASK</option>
+              <option value="MSK">MSK</option>
+            </select>
+          </div>
         </div>
+        
         <!-- Wi-Fi header controls -->
         <div id="wifi-header-controls" style="display:none;align-items:center;gap:8px;margin-left:12px">
           <select id="wifiBandSelect" style="padding:4px;border-radius:6px;background:transparent;color:var(--text);border:1px solid rgba(255,255,255,0.1)">
@@ -165,7 +192,7 @@
 
       <!-- MAIN MENU: 2 x 8 grid of buttons -->
       <section id="main-menu" aria-label="main-menu" class="menu active">
-        <div class="menu-grid-title">MAIN MENU</div>
+        <div class="menu-grid-title"></div>
         <div class="menu-grid-title"></div>
 
         <button class="menu-btn" data-action="wifi">Wi‑Fi</button>
@@ -182,7 +209,7 @@
         <button class="menu-btn" data-action="remotes">Universal Remotes</button>
         <button class="menu-btn" data-action="oscilloscope">Oscilloscope</button>
         <button class="menu-btn" data-action="wifi-scan">Wi‑Fi Scan</button>
-        <button class="menu-btn" data-action="sd">SD Tools</button>
+        <button id="systemInfoBtn" class="menu-btn">System Info</button>
         <button class="menu-btn" data-action="settings">Settings</button>
         <button class="menu-btn" data-action="about">About</button>
       </section>
@@ -250,6 +277,14 @@
         <aside class="panels log-panel">
           <pre id="cell-scan-output" style="overflow:auto;background:transparent;color:var(--success);padding:8px;border-radius:6px;font-family:monospace"></pre>
         </aside>
+      </section>
+
+      <!-- STATUS SCREEN: show results of status.info queries -->
+      <section id="status-screen" style="margin-top:14px" class="hidden" hidden=true>
+        <div class="panels" style="flex-direction:column;gap:12px;">
+          <h3 style="margin-top:0;color:var(--muted)">Device Status</h3>
+          <div id="status-content" style="display:flex;flex-wrap:wrap;gap:12px;"></div>
+        </div>
       </section>
 
       <!-- SENSOR CHART (kept for compatibility with existing code) -->
