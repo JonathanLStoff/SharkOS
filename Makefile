@@ -38,6 +38,7 @@ install-libs:
 	@$(ARDUINO_CLI) core install esp32:esp32 || true
 	@$(ARDUINO_CLI) lib install "ArduinoJson" || true
 	@$(ARDUINO_CLI) lib install "RF24" || true
+	@$(ARDUINO_CLI) lib install "SmartRC-CC1101-Driver-Lib" || true
 	@$(ARDUINO_CLI) lib install "Adafruit NeoPixel" || true
 	@$(ARDUINO_CLI) lib install "Adafruit PN532" || true
 	@$(ARDUINO_CLI) lib install "RadioLib" || true

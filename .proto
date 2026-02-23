@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 enum RadioModule { CC1101_1 = 0; CC1101_2 = 1; LORA = 2; NFC = 3; WIFI = 4; BLUETOOTH = 5; IR = 6; }
-
+enum RadioModuleCC { CC1101_1 = 0; CC1101_2 = 1; }
 message RadioSignal {
   uint64 timestamp_ms = 1;        // Arduino millis() or RTC
   RadioModule module = 2;
@@ -26,4 +26,37 @@ message status {
     bool bluetooth_connected = 8;
     bool ir_connected = 9;
     bool serial_connected = 10;
+}
+message CC1101Tx {
+    uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+    RadioModuleCC module = 2;         // CC1101_1 or CC1101_2
+    float frequency_mhz = 3;
+    int32 power_dbm = 4;           // transmission power in dBm
+    bytes payload = 5;              // raw packet bytes to transmit
+    string mod = 6;               // modulation, packet type, etc.
+    string extra = 7;             // optional extra info
+}
+message LoraTx {
+    uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+    float frequency_mhz = 2;
+    int32 power_dbm = 3;           // transmission power in dBm
+    bytes payload = 4;              // raw packet bytes to transmit
+    string mod = 5;               // modulation, packet type, etc.
+    string extra = 6;             // optional extra info
+}
+message NfcWrite {
+    uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+    bytes payload = 2;              // raw packet bytes to write to NFC tag
+    string extra = 3;             // optional extra info
+}
+message RFIDWrite {
+    uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+    bytes payload = 2;              // raw packet bytes to write to RFID tag
+    string extra = 3;             // optional extra info
+}
+message IRTx {
+    uint64 timestamp_ms = 1;        // Arduino millis() or RTC
+    int32 frequency_khz = 2;       // carrier frequency in kHz
+    bytes payload = 3;              // raw IR code bytes to transmit
+    string extra = 4;             // optional extra info
 }

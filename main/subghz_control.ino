@@ -7,8 +7,10 @@
 #include "transceivers.h"
 
 extern BLECharacteristic *pStatusChar;
-extern CC1101 cc1101;
-extern CC1101 cc1101_2;
+// extern CC1101 cc1101;
+// extern CC1101 cc1101_2;
+extern ELECHOUSE_CC1101 cc1101_driver_1;
+extern ELECHOUSE_CC1101 cc1101_driver_2;
 extern SX1276 lora;
 extern Adafruit_PN532 nfc;
 
@@ -40,15 +42,14 @@ void cc1101Read() {
 }
 
 // --- CC1101 connectivity checks -------------------------------------------------
-// Returns true if the RadioLib CC1101 instance responds to SPI register reads.
-static inline bool cc1101IsPresent(CC1101 &mod) {
-  int16_t ver = mod.getChipVersion();
-  return (ver > 0); // positive version indicates a responding chip
-}
-
 // Check primary / secondary modules
-bool cc1101Connected() { return cc1101IsPresent(cc1101); }
-bool cc1101_2Connected() { return cc1101IsPresent(cc1101_2); }
+bool cc1101Connected() { 
+    // Uses SmartRC Driver check
+    return cc1101_driver_1.getCC1101(); 
+}
+bool cc1101_2Connected() { 
+    return cc1101_driver_2.getCC1101(); 
+}
 
 // Convenience: true only if both modules are present
 bool cc1101BothConnected() { return cc1101Connected() && cc1101_2Connected(); }

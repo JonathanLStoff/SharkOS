@@ -347,8 +347,8 @@ NRF24Transceiver *nrf2Tx = nullptr;
 void initTransceivers() {
   // underlying hardware objects (cc1101, cc1101_2, lora, radio1/2) are
   // defined later in this file; call this after they are constructed.
-  if (!cc1101Tx) cc1101Tx = new CC1101_1Transceiver(&cc1101);
-  if (!cc1101Tx2) cc1101Tx2 = new CC1101_2Transceiver(&cc1101_2);
+  if (!cc1101Tx) cc1101Tx = new CC1101_1Transceiver(&cc1101_driver_1);
+  if (!cc1101Tx2) cc1101Tx2 = new CC1101_2Transceiver(&cc1101_driver_2);
   if (!loraTx) loraTx = new LoRaTransceiver(&lora);
   if (!nrf1Tx) nrf1Tx = new NRF24Transceiver(&radio1);
   // nrf2Tx disabled (radio2 removed)
@@ -563,26 +563,21 @@ Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET, &myWire);
 // Peripheral pin macros moved to globals.h (so all modules include them)
 // nRF24 / SD / RF24 / CC1101 / LoRa pin macros are defined in globals.h now.
 
-// SPI bus instances — ONE per hardware peripheral, never two on the same bus.
-// FSPI: nRF24 + LoRa (shared, different CS lines)
-// HSPI: REMOVED - CC1101 now shares RADIO_SPI
-SPIClass RADIO_SPI(FSPI);
-// SPIClass CC1101_SPI(HSPI); // Removed duplicate bus on same pins
-// LORA_SPI removed — LoRa now shares RADIO_SPI (both FSPI)
+// SPI bus — all radio modules share the global SPI object (FSPI on ESP32-S3).
+// Do NOT create a second SPIClass(FSPI) — two instances on the same peripheral
+// causes spiStartBus() to fail/crash when the second one tries to init.
 
 
 RF24 radio1(CE1_PIN, CSN1_PIN);
 // radio2 REMOVED — only one nRF24 module exists
 
-// CC1101 module
-Module cc1101_module(CC1101_1_CS, CC1101_1_GDO0, RADIOLIB_NC, CC1101_1_GDO2, RADIO_SPI);
-CC1101 cc1101(&cc1101_module);
+// CC1101 module (SmartRC Driver)
+ELECHOUSE_CC1101 cc1101_driver_1;
 // 2nd CC1101 module
-Module cc1101_module2(CC1101_2_CS, CC1101_2_GDO0, RADIOLIB_NC, CC1101_2_GDO2, RADIO_SPI);
-CC1101 cc1101_2(&cc1101_module2);
+ELECHOUSE_CC1101 cc1101_driver_2;
 
-// LoRa module — shares RADIO_SPI (FSPI) with nRF24, different CS pin (LORA_NSS)
-Module lora_module(LORA_NSS, LORA_DIO0, LORA_RESET, LORA_DIO1, RADIO_SPI);
+// LoRa module — shares global SPI (FSPI) with nRF24, different CS pin (LORA_NSS)
+Module lora_module(LORA_NSS, LORA_DIO0, LORA_RESET, LORA_DIO1, SPI);
 SX1276 lora(&lora_module);
 
 
@@ -689,19 +684,32 @@ void deviceSetup() {
   }
   delay(10); // yield to WDT
 
-  // Start SPI buses BEFORE initializing radio modules
-  Serial.println("deviceSetup: starting SPI buses");
-  RADIO_SPI.begin(NRF_SCK, NRF_MISO, NRF_MOSI); // FSPI for NRF + LoRa + CC1101
-  // CC1101_SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI); // Removed duplicate init
+  // DO NOT pre-initialize SPI here. The CC1101 library uses the global
+  // `SPI` object (which is SPIClass(FSPI) on ESP32-S3). Creating a second
+  // SPIClass(FSPI) and calling .begin() claims the FSPI peripheral, causing
+  // the CC1101 library's SPI.begin() inside Init() to fail/crash.
+  // Let each radio library manage its own SPI.begin() calls.
+  Serial.println("deviceSetup: starting SPI buses (deferred to radio libs)");
   delay(10); // yield to WDT
 
-  // Init CC1101
-  Serial.println("deviceSetup: initializing CC1101");
-  int state = cc1101.begin(433.0);
-  if (state != RADIOLIB_ERR_NONE) {
-    Serial.print("CC1101 init failed: ");
-    Serial.println(state);
-  }
+  // Init CC1101 #1
+  // MUST set SPI pins and GDO BEFORE Init() — otherwise Init() uses
+  // default ESP32 pins (18/19/23/5), hangs on Reset() waiting for MISO.
+  Serial.println("deviceSetup: initializing CC1101 #1");
+  cc1101_driver_1.setSpiPin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, CC1101_1_CS);
+  cc1101_driver_1.setGDO(CC1101_1_GDO0, CC1101_1_GDO2);
+  cc1101_driver_1.Init();
+  cc1101_driver_1.setMHZ(433.92);
+  Serial.println("CC1101 #1 init OK");
+  delay(10); // yield to WDT
+
+  // Init CC1101 #2
+  Serial.println("deviceSetup: initializing CC1101 #2");
+  cc1101_driver_2.setSpiPin(CC1101_2_SCK, CC1101_2_MISO, CC1101_2_MOSI, CC1101_2_CS);
+  cc1101_driver_2.setGDO(CC1101_2_GDO0, CC1101_2_GDO2);
+  cc1101_driver_2.Init();
+  cc1101_driver_2.setMHZ(433.92);
+  Serial.println("CC1101 #2 init OK");
 
   // Init LoRa (disabled by default for S3 dev boards because the
   // LORA SPI pins overlap the board's flash/PSRAM lines; leave as a

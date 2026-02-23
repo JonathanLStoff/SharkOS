@@ -238,17 +238,21 @@ extern int wifi_selectedIndex;
 extern int wifi_networkCount;
 extern bool wifi_showInfo;
 
-extern SPIClass RADIO_SPI;
+//extern SPIClass RADIO_SPI;
 // extern SPIClass CC1101_SPI; // Removed
 // LORA_SPI removed — LoRa now shares RADIO_SPI (both FSPI)
 
 extern RF24 radio1;
 // radio2 REMOVED — single nRF24 module only
 
-extern Module cc1101_module;
-extern CC1101 cc1101;
-extern Module cc1101_module2;
-extern CC1101 cc1101_2;
+// extern Module cc1101_module;
+// extern CC1101 cc1101;
+// extern Module cc1101_module2;
+// extern CC1101 cc1101_2;
+
+#include <ELECHOUSE_CC1101_SRC_DRV.h>
+extern ELECHOUSE_CC1101 cc1101_driver_1;
+extern ELECHOUSE_CC1101 cc1101_driver_2;
 extern Module lora_module;
 extern SX1276 lora;
 

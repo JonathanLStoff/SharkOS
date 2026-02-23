@@ -108,6 +108,48 @@ function appendLog(line: string) {
   out.scrollTop = out.scrollHeight;
 }
 
+// Show a modal alert overlay for disconnected radio modules
+function showRadioAlert(messages: string[]) {
+  // Remove any existing alert
+  document.getElementById('radio-alert-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'radio-alert-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:1100;padding:24px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'max-width:420px;width:100%;background:var(--bg-panel);border-radius:12px;padding:20px;border:1px solid var(--danger);box-shadow:0 8px 40px rgba(220,38,38,0.3)';
+
+  const title = document.createElement('h3');
+  title.style.cssText = 'margin:0 0 12px;color:var(--danger);font-size:16px';
+  title.textContent = 'Radio Connection Warning';
+  box.appendChild(title);
+
+  messages.forEach(msg => {
+    const p = document.createElement('p');
+    p.style.cssText = 'margin:6px 0;color:var(--text);font-size:14px';
+    p.textContent = msg;
+    box.appendChild(p);
+  });
+
+  const hint = document.createElement('p');
+  hint.style.cssText = 'margin:12px 0 0;color:var(--muted);font-size:12px';
+  hint.textContent = 'Check SPI wiring, CS/GDO pins, and ensure modules are powered.';
+  box.appendChild(hint);
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.className = 'btn';
+  dismissBtn.style.cssText = 'margin-top:16px;width:100%';
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.addEventListener('click', () => overlay.remove());
+  box.appendChild(dismissBtn);
+
+  overlay.appendChild(box);
+  // Also dismiss on clicking outside the box
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
 // <-- Main menu wiring -->
 type MenuMapEntry = { view: string; chart?: 'signal' | 'channels' | 'sensor' | 'logs'; autoRun?: boolean };
 const menuToTemplate: Record<string, MenuMapEntry> = {
@@ -193,6 +235,15 @@ function setChartRange(kind: 'channels' | 'signal', min: number | null, max: num
     else delete xScale.min;
     if (max !== null) xScale.max = max;
     else delete xScale.max;
+    // Adjust tick step: for frequency ranges >20, use 5 MHz steps
+    const range = (max ?? 0) - (min ?? 0);
+    xScale.ticks.stepSize = range > 20 ? 5 : 1;
+    // Adjust bar width for dense frequency sweeps
+    const ds = channelsChart.data.datasets[0] as any;
+    if (ds) {
+      ds.barPercentage = range > 20 ? 0.4 : 0.8;
+      ds.barThickness = range > 50 ? 3 : (range > 20 ? 5 : undefined);
+    }
     channelsChart.update();
   }
 }
@@ -290,8 +341,8 @@ function createChannelsChart() {
       type: 'bar',
       data: { 
         datasets: [{
-          label: 'Wi-Fi Networks',
-          data: [], // objects { x: channel, y: rssi, ssid: 'name', module?:number }
+          label: 'Signal',
+          data: [], // objects { x: channel/freq, y: rssi, ssid: 'name', module?:number }
           // per-bar colors will be populated dynamically when signals arrive
           backgroundColor: [] as any[],
           borderWidth: 0,
@@ -315,7 +366,7 @@ function createChannelsChart() {
           },
           y: { 
             display: true, 
-            title: { display: true, text: 'Signal Strength (RSSI)' },
+            title: { display: true, text: 'Signal Strength (RSSI dBm)' },
             min: -100,
             max: 0
           }
@@ -326,7 +377,9 @@ function createChannelsChart() {
             callbacks: {
               label: (ctx: any) => {
                 const raw = ctx.raw as any;
-                return `${raw.ssid || 'Unknown'}: ${raw.y} dBm`;
+                const label = raw.ssid || 'Unknown';
+                const xLabel = currentAction?.startsWith('sub-ghz') ? `${raw.x} MHz` : `Ch ${raw.x}`;
+                return `${label} @ ${xLabel}: ${raw.y} dBm`;
               }
             }
           }
@@ -368,14 +421,31 @@ function attachZoomHandlers(container: HTMLElement | null) {
   }, { passive: false });
 }
 
+// Reconfigure the channels chart axes depending on whether we're showing
+// Sub-GHz frequency data or Wi-Fi channel data.
+function configureChannelsChartForAction(action: string | null) {
+  if (!channelsChart) return;
+  const xScale = (channelsChart as any).options.scales.x;
+  if (action?.startsWith('sub-ghz')) {
+    xScale.title.text = 'Frequency (MHz)';
+    xScale.ticks.stepSize = 1;
+  } else {
+    xScale.title.text = 'Channel';
+    xScale.ticks.stepSize = 1;
+  }
+}
+
 function showChart(kind: string) {
   const signalPanel = document.getElementById('signal-panel');
   const channelsPanel = document.getElementById('channels-panel');
   
+  // Reconfigure axes for the active action
+  if (kind === 'channels') configureChannelsChartForAction(currentAction);
+
   // Hide log panel for channel scan to maximize space
   const logPanel = document.querySelector('.log-panel') as HTMLElement | null;
   if (logPanel) {
-    const hideLog = (currentAction === 'wifi-channel-scan' || kind === 'channels');
+    const hideLog = (currentAction === 'wifi-channel-scan' || currentAction?.startsWith('sub-ghz') || kind === 'channels');
     logPanel.style.display = hideLog ? 'none' : '';
     // Make main panel take full width when log is hidden
     const mainPanel = document.querySelector('.chart-main') as HTMLElement | null;
@@ -411,6 +481,7 @@ let isPlaying = false;
 let isRecording = false;
 let currentView = 'main-menu';
 let currentAction: string | null = null; // track last action (used by Play button)
+let pendingRadioCheck = false; // set when entering sub-ghz submenu to show radio popup
 const recordedEvents: any[] = [];
 let simUpdateId: number | null = null;
 
@@ -488,33 +559,28 @@ function setPlaying(val: boolean) {
         }
       }
 
-      // Build params helper
-      const makeParams = (freqMHz: number, modulation: string, radio: number) => ({ frequency_khz: Math.round(freqMHz * 1000), modulation, radio });
-
       if (isPlaying) {
-        // start each radio separately (if inputs present)
-        if (in1) {
-          const params = makeParams(f1, modA, 1);
-          await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(params) });
-          appendLog(`[sub-ghz] radio-1 start -> freq=${f1}MHz mod=${modA}`);
+        const high = Math.max(f1, f2);
+        const low = Math.min(f1, f2);
+        // Update chart range and clear old data for the new sweep
+        setChartRange('channels', Math.floor(low), Math.ceil(high));
+        configureChannelsChartForAction('sub-ghz-scanner');
+        if (channelsChart) {
+          channelsChart.data.datasets.forEach(ds => { ds.data = []; if (Array.isArray(ds.backgroundColor)) (ds.backgroundColor as any[]).length = 0; });
+          channelsChart.update();
         }
-        if (in2) {
-          const params = makeParams(f2, modB, 2);
-          await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(params) });
-          appendLog(`[sub-ghz] radio-2 start -> freq=${f2}MHz mod=${modB}`);
-        }
+        const startParams = {
+          top_frequency_mhz: high,
+          bottom_frequency_mhz: low,
+          modulation_one: modA,
+          modulation_two: modB,
+          frequency_mhz: high
+        };
+        await invoke<string>('run_action', { action: 'subghz.read.start', macaddy, params: JSON.stringify(startParams) });
+        appendLog(`[sub-ghz] start -> high=${high}MHz low=${low}MHz mod1=${modA} mod2=${modB}`);
       } else {
-        // stop both radios (best-effort)
-        if (in1) {
-          const params = { radio: 1 };
-          await invoke<string>('run_action', { action: 'subghz.read.stop', macaddy, params: JSON.stringify(params) });
-          appendLog('[sub-ghz] radio-1 stop');
-        }
-        if (in2) {
-          const params = { radio: 2 };
-          await invoke<string>('run_action', { action: 'subghz.read.stop', macaddy, params: JSON.stringify(params) });
-          appendLog('[sub-ghz] radio-2 stop');
-        }
+        await invoke<string>('run_action', { action: 'subghz.read.stop', macaddy, params: JSON.stringify({}) });
+        appendLog('[sub-ghz] stop');
       }
     } catch (e) {
       error('[sub-ghz] start/stop dispatch failed: ' + String(e));
@@ -858,6 +924,24 @@ async function setup() {
       if (map.chart) showChart(map.chart as any);
       appendLog(`Opened submenu: ${action}`);
       enableHeaderControls(true);
+
+      // When opening the Sub-GHz submenu, probe CC1101 connectivity and
+      // show a popup if either radio is disconnected.
+      if (action === 'subghz') {
+        (async () => {
+          try {
+            const macaddy = (loadSavedBTDevice()?.mac) || '';
+            await invoke<string>('run_action', { action: 'status.info', macaddy, params: null });
+            // The status response will arrive asynchronously via BLE notification
+            // and be decoded by handleRadioSignalData → showStatusObject.
+            // We set a flag so the status handler can also show the radio popup.
+            pendingRadioCheck = true;
+          } catch (e) {
+            appendLog(`sub-ghz radio check failed: ${String(e)}`);
+          }
+        })();
+      }
+
       // DO NOT auto-start playing / generating data — user will start explicitly
       return;
     }
@@ -877,6 +961,18 @@ async function setup() {
          else setChartRange('channels', 36, 165);
          
          params = { band, channel: (chan === 'all' ? 0 : parseInt(chan)) };
+      }
+      if (action === 'sub-ghz-scanner') {
+         // Set chart range to match the frequency inputs
+         const f1 = parseFloat((document.getElementById('subghzFreqInput1') as HTMLInputElement)?.value || '433');
+         const f2 = parseFloat((document.getElementById('subghzFreqInput2') as HTMLInputElement)?.value || '400');
+         const lo = Math.floor(Math.min(f1, f2));
+         const hi = Math.ceil(Math.max(f1, f2));
+         setChartRange('channels', lo, hi);
+         // clear old data
+         if (channelsChart) {
+           channelsChart.data.datasets.forEach(ds => { ds.data = []; if (Array.isArray(ds.backgroundColor)) (ds.backgroundColor as any[]).length = 0; });
+         }
       }
 
       // Sub-GHz scanner is controlled by Play/Stop (per-radio start/stop)
@@ -1159,6 +1255,24 @@ function getBleChannel(freq: number): number | null {
 
   // helper: display a status object in the newly added status screen
   function showStatusObject(st: any) {
+    // If this was triggered by the sub-ghz submenu radio check, show a
+    // popup alert about disconnected radios instead of navigating away.
+    if (pendingRadioCheck) {
+      pendingRadioCheck = false;
+      const r1 = st.cc1101_1_connected;
+      const r2 = st.cc1101_2_connected;
+      const msgs: string[] = [];
+      if (r1 === false) msgs.push('CC1101 Radio 1 (module 0) is DISCONNECTED');
+      if (r2 === false) msgs.push('CC1101 Radio 2 (module 1) is DISCONNECTED');
+      if (msgs.length > 0) {
+        showRadioAlert(msgs);
+      } else {
+        appendLog('[sub-ghz] Both CC1101 radios connected');
+      }
+      // Don't navigate to status screen — stay on sub-ghz submenu
+      return;
+    }
+
     const content = document.getElementById('status-content');
     if (!content) return;
     // clear previous

@@ -463,22 +463,87 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
   }
 
   if (key == CMD_SUBGHZ_READ_START) {
-    // optional params: { frequency_khz: int, modulation: string }
+    // optional params:
+    // {
+    //   frequency_khz|frequency_mhz,
+    //   top_frequency_mhz|top_freq_mhz,
+    //   bottom_frequency_mhz|bot_frequency_mhz,
+    //   modulation,
+    //   modulation_one,
+    //   modulation_two
+    // }
+    float topMHz = 0.0f;
+    float botMHz = 0.0f;
+    String mod1 = "OOK";
+    String mod2 = "2-FSK";
+
     if (params && params->containsKey("frequency_khz")) {
       long fk = (*params)["frequency_khz"].as<long>();
       if (fk > 0) {
         scanFrequency = ((float)fk) / 1000.0; // store as MHz
+        topMHz = scanFrequency;
       }
     } else if (params && params->containsKey("frequency_mhz")) {
       float fm = (*params)["frequency_mhz"].as<float>();
-      if (fm > 0.0) scanFrequency = fm;
+      if (fm > 0.0) {
+        scanFrequency = fm;
+        topMHz = fm;
+      }
     }
+
+    if (params && params->containsKey("top_frequency_mhz")) {
+      float v = (*params)["top_frequency_mhz"].as<float>();
+      if (v > 0.0f) topMHz = v;
+    } else if (params && params->containsKey("top_freq_mhz")) {
+      float v = (*params)["top_freq_mhz"].as<float>();
+      if (v > 0.0f) topMHz = v;
+    }
+
+    if (params && params->containsKey("bottom_frequency_mhz")) {
+      float v = (*params)["bottom_frequency_mhz"].as<float>();
+      if (v > 0.0f) botMHz = v;
+    } else if (params && params->containsKey("bot_frequency_mhz")) {
+      float v = (*params)["bot_frequency_mhz"].as<float>();
+      if (v > 0.0f) botMHz = v;
+    }
+
     if (params && params->containsKey("modulation")) {
       const char *m = (*params)["modulation"];
       if (m) {
-        set_scan_modulation_pair(String(m), String(m));
+        mod1 = String(m);
+        mod2 = String(m);
       }
     }
+
+    if (params && params->containsKey("modulation_one")) {
+      const char *m = (*params)["modulation_one"];
+      if (m) mod1 = String(m);
+    }
+    if (params && params->containsKey("modulation_two")) {
+      const char *m = (*params)["modulation_two"];
+      if (m) mod2 = String(m);
+    }
+
+    if (topMHz <= 0.0f) topMHz = 433.0f;
+    if (botMHz <= 0.0f) botMHz = 400.0f;
+    if (topMHz < botMHz) {
+      float t = topMHz;
+      topMHz = botMHz;
+      botMHz = t;
+    }
+
+    if (cc1101Tx) {
+      cc1101Tx->setTopFrequency(topMHz);
+      cc1101Tx->setBotFrequency(botMHz);
+      cc1101Tx->setModulation(mod1);
+    }
+    if (cc1101Tx2) {
+      cc1101Tx2->setTopFrequency(topMHz);
+      cc1101Tx2->setBotFrequency(botMHz);
+      cc1101Tx2->setModulation(mod2);
+    }
+    set_scan_modulation_pair(mod1, mod2);
+
     // use existing cc1101Read() which is non-blocking and reports via notifyStatus
     start_active_scan_internal(SCAN_SUBGHZ, [](){ cc1101Read(); }, 2000, "subghz_read");
     scanningRadio = true; // keep compatibility with older handlers
@@ -833,6 +898,36 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
       }
     }
     bluetooth_send_response_internal("subghz.mod.two:ok");
+    return;
+  }
+  if (key == CMD_SUBGHZ_SET_TOP_FREQ) {
+    if (params && params->containsKey("frequency")) {
+      float f = (*params)["frequency"].as<float>();
+      int radio = params->containsKey("radio") ? (*params)["radio"].as<int>() : 1;
+      if (f > 0.0f) {
+        if (radio == 2) {
+          if (cc1101Tx2) cc1101Tx2->setTopFrequency(f);
+        } else {
+          if (cc1101Tx) cc1101Tx->setTopFrequency(f);
+        }
+      }
+    }
+    bluetooth_send_response_internal("subghz.top.freq:ok");
+    return;
+  }
+  if (key == CMD_SUBGHZ_SET_BOT_FREQ) {
+    if (params && params->containsKey("frequency")) {
+      float f = (*params)["frequency"].as<float>();
+      int radio = params->containsKey("radio") ? (*params)["radio"].as<int>() : 1;
+      if (f > 0.0f) {
+        if (radio == 2) {
+          if (cc1101Tx2) cc1101Tx2->setBotFrequency(f);
+        } else {
+          if (cc1101Tx) cc1101Tx->setBotFrequency(f);
+        }
+      }
+    }
+    bluetooth_send_response_internal("subghz.bot.freq:ok");
     return;
   }
   if (key == CMD_SUBGHZ_READ_START) { start_scan_for_key(String(CMD_SUBGHZ_READ_START), params); return; }

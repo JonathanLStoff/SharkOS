@@ -6,9 +6,11 @@
 #include <RadioLib.h>
 #include <RF24.h>
 #include "globals.h"
+#include <ELECHOUSE_CC1101_SRC_DRV.h>
 
 // Forward declaration of event enqueue function implemented in events.ino
 extern void events_enqueue_radio_bytes(int module, const uint8_t* data, size_t len, float frequency_mhz, int32_t rssi);
+extern void hw_send_radio_signal_protobuf(int module, float frequency_mhz, int32_t rssi, const uint8_t* data, size_t len, const char* extra);
 
 // Forward declarations of hardware helpers (must be available at link time)
 void cc1101Read();
@@ -23,12 +25,14 @@ public:
 
 class CC1101_1Transceiver : public Transceiver {
 public:
-  CC1101 *dev;
+  ELECHOUSE_CC1101 *dev;
   RadioModule moduleId;
   float topFreqMHz;
   float botFreqMHz;
   ModulationType modulation;
-  CC1101_1Transceiver(CC1101 *d): dev(d), moduleId(CC1101_1), topFreqMHz(0.0f), botFreqMHz(0.0f), modulation(MOD_OOK) {}
+  
+  CC1101_1Transceiver(ELECHOUSE_CC1101 *d): dev(d), moduleId(CC1101_1), topFreqMHz(433.0f), botFreqMHz(400.0f), modulation(MOD_OOK) {}
+  
   bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
     // enqueue raw bytes into events subsystem which will batch and notify
     events_enqueue_radio_bytes((int)moduleId, payload.data(), payload.size(), freq_mhz, rssi);
@@ -45,10 +49,8 @@ public:
   }
   void setModulation(const String &modStr) {
     // -------- Parse string ----------
-    if (modStr == "OOK") {
+    if (modStr == "OOK" || modStr == "ASK") {
       modulation = MOD_OOK;
-    } else if (modStr == "ASK") {
-      modulation = MOD_ASK;
     } else if (modStr == "2-FSK") {
       modulation = MOD_2FSK;
     } else if (modStr == "GFSK") {
@@ -61,38 +63,34 @@ public:
     }
 
     // -------- Apply to CC1101 --------
-    dev->standby();  // important before reconfig
-
+    dev->SpiStrobe(CC1101_SIDLE); // Enter IDLE state
+    
     switch (modulation) {
-      case MOD_OOK:
-      case MOD_ASK:
-        dev->setOOK(true);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(0.0);
+      case MOD_OOK: // ASK/OOK
+        dev->setModulation(2); 
+        dev->setDRate(4.8); 
+        dev->setDeviation(0.0);
         break;
       case MOD_2FSK:
-        dev->setOOK(false);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(5.0);
-        dev->setDataShaping(RADIOLIB_SHAPING_NONE);
+        dev->setModulation(0); // 2-FSK
+        dev->setDRate(4.8);
+        dev->setDeviation(5.0);
         break;
       case MOD_GFSK:
-        dev->setOOK(false);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(5.0);
-        dev->setDataShaping(RADIOLIB_SHAPING_0_5);
+        dev->setModulation(1); // GFSK
+        dev->setDRate(4.8);
+        dev->setDeviation(5.0);
         break;
       case MOD_MSK:
-        dev->setOOK(false);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(2.4);
-        dev->setDataShaping(RADIOLIB_SHAPING_NONE);
+        dev->setModulation(4); // MSK
+        dev->setDRate(4.8);
+        dev->setDeviation(2.4);
         break;
       default:
         break;
     }
-
-    dev->startReceive();  // resume RX
+    
+    dev->SetRx(); // Resume RX
   }
   void setTopFrequency(float freqMHz) {
     topFreqMHz = freqMHz;
@@ -123,27 +121,44 @@ public:
 
     // Sync CC1101's OOK flag for simple modulations
     if (modulation == MOD_OOK || modulation == MOD_ASK) {
-      dev->setOOK(true);
-    } else {
-      dev->setOOK(false);
-    }
+      dev->setModulation(2);
+    } 
+
+    // Put radio into receive mode once before sweep
+    dev->SetRx();
+    delay(2); // initial RX settle
 
     for (float f = low; f <= high && scanningRadio; f += stepMHz) {
-      dev->setFrequency(f);
-      int32_t rssi = (int32_t)dev->getRSSI();
-      events_enqueue_radio_bytes((int)moduleId, nullptr, 0, f, rssi);
+      dev->setMHZ(f);
+      // Re-enter RX after frequency change for RSSI to update
+      dev->SetRx();
+      delay(1); // 1ms settle for RSSI register to update
+      int32_t rssi = (int32_t)dev->getRssi();
+
+      uint32_t freq_khz = (uint32_t)(f * 1000.0f);
+      uint8_t sample[7];
+      sample[0] = (uint8_t)modulation;
+      sample[1] = (uint8_t)(freq_khz & 0xFF);
+      sample[2] = (uint8_t)((freq_khz >> 8) & 0xFF);
+      sample[3] = (uint8_t)((freq_khz >> 16) & 0xFF);
+      sample[4] = (uint8_t)((freq_khz >> 24) & 0xFF);
+      sample[5] = (uint8_t)(rssi & 0xFF);
+      sample[6] = (uint8_t)moduleId;
+
+      events_enqueue_radio_bytes((int)moduleId, sample, sizeof(sample), f, rssi);
+      hw_send_radio_signal_protobuf((int)moduleId, f, rssi, sample, sizeof(sample), "scan_range");
     }
   }
 };
 
 class CC1101_2Transceiver : public Transceiver {
 public:
-  CC1101 *dev;
+  ELECHOUSE_CC1101 *dev;
   RadioModule moduleId;
   float topFreqMHz;
   float botFreqMHz;
   ModulationType modulation;
-  CC1101_2Transceiver(CC1101 *d): dev(d), moduleId(CC1101_2), topFreqMHz(928.0f), botFreqMHz(300.0f), modulation(MOD_UNKNOWN) {}
+  CC1101_2Transceiver(ELECHOUSE_CC1101 *d): dev(d), moduleId(CC1101_2), topFreqMHz(433.0f), botFreqMHz(400.0f), modulation(MOD_2FSK) {}
   bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
     events_enqueue_radio_bytes((int)moduleId, payload.data(), payload.size(), freq_mhz, rssi);
     return true;
@@ -153,11 +168,8 @@ public:
   void stopReceiveLoop() { receiving = false; }
   void poll() { if (!receiving) return; cc1101Read(); }
   void setModulation(const String &modStr) {
-    // interpret string and update stored value
-    if (modStr == "OOK") {
+    if (modStr == "OOK" || modStr == "ASK") {
       modulation = MOD_OOK;
-    } else if (modStr == "ASK") {
-      modulation = MOD_ASK;
     } else if (modStr == "2-FSK") {
       modulation = MOD_2FSK;
     } else if (modStr == "GFSK") {
@@ -169,37 +181,32 @@ public:
       return;
     }
 
-    // reconfigure hardware - must be in standby while changing parameters
-    dev->standby();
+    dev->SpiStrobe(CC1101_SIDLE);
     switch (modulation) {
       case MOD_OOK:
-      case MOD_ASK:
-        dev->setOOK(true);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(0.0);
+        dev->setModulation(2);
+        dev->setDRate(4.8);
+        dev->setDeviation(0.0);
         break;
       case MOD_2FSK:
-        dev->setOOK(false);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(5.0);
-        dev->setDataShaping(RADIOLIB_SHAPING_NONE);
+        dev->setModulation(0);
+        dev->setDRate(4.8);
+        dev->setDeviation(5.0);
         break;
       case MOD_GFSK:
-        dev->setOOK(false);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(5.0);
-        dev->setDataShaping(RADIOLIB_SHAPING_0_5);
+        dev->setModulation(1);
+        dev->setDRate(4.8);
+        dev->setDeviation(5.0);
         break;
       case MOD_MSK:
-        dev->setOOK(false);
-        dev->setBitRate(4.8);
-        dev->setFrequencyDeviation(2.4);
-        dev->setDataShaping(RADIOLIB_SHAPING_NONE);
+        dev->setModulation(4);
+        dev->setDRate(4.8);
+        dev->setDeviation(2.4);
         break;
       default:
         break;
     }
-    dev->startReceive();
+    dev->SetRx();
   }
   void setTopFrequency(float freqMHz) {
     topFreqMHz = freqMHz;
@@ -225,17 +232,31 @@ public:
 
     extern bool scanningRadio; // from hardware-utils or events
 
-    // Sync CC1101's OOK flag
     if (modulation == MOD_OOK || modulation == MOD_ASK) {
-      dev->setOOK(true);
-    } else {
-      dev->setOOK(false);
-    }
+      dev->setModulation(2);
+    } 
+
+    dev->SetRx();
+    delay(2); 
 
     for (float f = low; f <= high && scanningRadio; f += stepMHz) {
-      dev->setFrequency(f);
-      int32_t rssi = (int32_t)dev->getRSSI();
-      events_enqueue_radio_bytes((int)moduleId, nullptr, 0, f, rssi);
+      dev->setMHZ(f);
+      dev->SetRx();
+      delay(1); 
+      int32_t rssi = (int32_t)dev->getRssi();
+
+      uint32_t freq_khz = (uint32_t)(f * 1000.0f);
+      uint8_t sample[7];
+      sample[0] = (uint8_t)modulation;
+      sample[1] = (uint8_t)(freq_khz & 0xFF);
+      sample[2] = (uint8_t)((freq_khz >> 8) & 0xFF);
+      sample[3] = (uint8_t)((freq_khz >> 16) & 0xFF);
+      sample[4] = (uint8_t)((freq_khz >> 24) & 0xFF);
+      sample[5] = (uint8_t)(rssi & 0xFF);
+      sample[6] = (uint8_t)moduleId;
+
+      events_enqueue_radio_bytes((int)moduleId, sample, sizeof(sample), f, rssi);
+      hw_send_radio_signal_protobuf((int)moduleId, f, rssi, sample, sizeof(sample), "scan_range");
     }
   }
 };

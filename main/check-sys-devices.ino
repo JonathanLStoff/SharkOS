@@ -6,12 +6,12 @@ void checksysdevices() {
 
   // ----- Init radio1 -----
   Serial.println("checksysdevices: calling radio1.begin(&RADIO_SPI)");
-  if (radio1.begin(&RADIO_SPI)) {
-    // radio1_state = "work";
-    Serial.println("checksysdevices: radio1 OK");
-  } else {
-    Serial.println("checksysdevices: radio1 FAIL");
-  }
+  // if (radio1.begin(&RADIO_SPI)) {
+  //   // radio1_state = "work";
+  //   Serial.println("checksysdevices: radio1 OK");
+  // } else {
+  //   Serial.println("checksysdevices: radio1 FAIL");
+  // }
 
   // radio2 disabled...
   Serial.println("checksysdevices: finished");
