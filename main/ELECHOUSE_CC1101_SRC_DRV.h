@@ -114,6 +114,32 @@ cc1101 Driver for RC Switch. Mod by Little Satan. With permission to modify and 
 class ELECHOUSE_CC1101
 {
 private:
+  // Per-instance SPI bus (defaults to global SPI / FSPI)
+  SPIClass *_spiBus;
+
+  // Per-instance pin state — no longer file-scope globals
+  byte _SCK_PIN, _MISO_PIN, _MOSI_PIN, _SS_PIN;
+  byte _GDO0, _GDO2;
+  byte _SCK_PIN_M[6], _MISO_PIN_M[6], _MOSI_PIN_M[6], _SS_PIN_M[6];
+  byte _GDO0_M[6], _GDO2_M[6];
+  byte _gdo_set;
+
+  // Per-instance radio state
+  bool  _spi, _ccmode;
+  float _MHz;
+  byte  _modulation, _frend0, _chan;
+  int   _pa;
+  byte  _last_pa;
+  byte  _m4RxBw, _m4DaRa;
+  byte  _m2DCOFF, _m2MODFM, _m2MANCH, _m2SYNCM;
+  byte  _m1FEC, _m1PRE, _m1CHSP;
+  byte  _pc1PQT, _pc1CRC_AF, _pc1APP_ST, _pc1ADRCHK;
+  byte  _pc0WDATA, _pc0PktForm, _pc0CRC_EN, _pc0LenConf;
+  byte  _trxstate;
+  bool  _spi_initialized;
+  byte  _clb1[2], _clb2[2], _clb3[2], _clb4[2];
+  uint8_t _PA_TABLE[8];
+
   void SpiStart(void);
   void SpiEnd(void);
   void GDO_Set (void);
@@ -128,6 +154,8 @@ private:
   void Split_MDMCFG2(void);
   void Split_MDMCFG4(void);
 public:
+  ELECHOUSE_CC1101();                   // constructor — initialises all member state
+  void setSPIBus(SPIClass *bus);        // assign a custom SPI peripheral (e.g. HSPI for radio #2)
   void Init(void);
   byte SpiReadStatus(byte addr);
   void setSpiPin(byte sck, byte miso, byte mosi, byte ss);

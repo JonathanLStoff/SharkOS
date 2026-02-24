@@ -110,8 +110,9 @@ struct rf_signal {
 #define I2C_SCL 7
 
 // ==== IR Pins ====
-#define irsenderpin  1 // Relocated to avoid SPI/UART overlap
-#define irrecivepin  2 
+// Moved from GPIO 1/2 to 38/39 — GPIOs 1 & 2 are now CC1101 GDO0 pins
+#define irsenderpin  38
+#define irrecivepin  39
 
 #define PN532_IRQ   6
 #define PN532_RESET 21
@@ -121,38 +122,51 @@ struct rf_signal {
 #define SPI_MISO   13 // Hardware FSPIQ [3]
 #define SPI_MOSI   11 // Hardware FSPID [3]
 
-// nRF24 Module (Shared SPI)
+// CC1101_1 Module (Shared SPI)
+#define CC1101_1_SCK   12 // phys 5
+#define CC1101_1_MISO  13 // phys 7
+#define CC1101_1_MOSI  11 // phys 6
+#define CC1101_1_CS    14 // phys 4
+#define CC1101_1_GDO0  1 // phys 3 from 15 to 1
+#define CC1101_1_GDO2  16 // phys 8
+
+// CC1101_2 Module (Shared SPI)
+#define CC1101_2_SCK   5 // phys 5
+#define CC1101_2_MISO  4 // phys 7
+#define CC1101_2_MOSI  6 // phys 6
+#define CC1101_2_CS    17 // phys 4
+#define CC1101_2_GDO0  2 // phys 3 from 18 to 2
+#define CC1101_2_GDO2  9 // phys 8
+
+// ==== SPI BUS 1 (Hardware FSPI / SPI2) ====
+// Handles CC1101_1 and PN532 (NFC)
+#define SPI2_SCK    12 // Hardware FSPICLK [10]
+#define SPI2_MISO   13 // Hardware FSPIQ [10]
+#define SPI2_MOSI   11 // Hardware FSPID [10]
+
+// PN532 (NFC) via SPI2
 #define NRF_SCK    12
 #define NRF_MISO   13
 #define NRF_MOSI   11
 #define CE1_PIN    9 
 #define CSN1_PIN   10 // Hardware FSPICS0 [3]
 
-// CC1101_1 Module (Shared SPI)
-#define CC1101_1_SCK   12 // phys 5
-#define CC1101_1_MISO  13 // phys 7
-#define CC1101_1_MOSI  11 // phys 6
-#define CC1101_1_CS    14 // phys 4
-#define CC1101_1_GDO0  15 // phys 3
-#define CC1101_1_GDO2  16 // phys 8
+// ==== SPI BUS 2 (Hardware SPI3) ====
+// Handles CC1101_2 and LoRa
+// USB pins 19 and 20 are NOT USED here to ensure code uploads work [3, 11]
+#define SPI3_SCK    5 
+#define SPI3_MISO   4 
+#define SPI3_MOSI   6 
 
-// CC1101_2 Module (Shared SPI)
-#define CC1101_2_SCK   12
-#define CC1101_2_MISO  13
-#define CC1101_2_MOSI  11
-#define CC1101_2_CS    17
-#define CC1101_2_GDO0  18
-#define CC1101_2_GDO2  4
-
-// LoRa Module (Shared SPI)
-#define LORA_SCK   12
-#define LORA_MISO  13
-#define LORA_MOSI  11
-#define LORA_NSS   38 // Moved from 35-37 (Restricted Octal SPI PSRAM pins) [2, 5]
-#define LORA_RESET 39
-#define LORA_DIO0  40
-#define LORA_DIO1  41
-#define LORA_DIO2  42
+// LoRa Module via SPI3
+#define LORA_SCK   5
+#define LORA_MISO  4
+#define LORA_MOSI  6
+#define LORA_NSS   45 // All LoRa pins moved away from 33-42 (PSRAM range) [4, 5]
+#define LORA_RESET 46 
+#define LORA_DIO0  69 // was 1
+#define LORA_DIO1  69 // was 2
+#define LORA_DIO2  17 // (Shared with CS or moved to another free pin)
 
 #define DISRUPT_DURATION 500
 
@@ -432,5 +446,23 @@ void hw_send_status_protobuf(bool is_scanning,
                              bool bluetooth_connected,
                              bool ir_connected,
                              bool serial_connected);
+
+// CC1101 register dump struct used by subghz_control diagnostic
+struct CC1101RegDump {
+  byte iocfg0, iocfg2, pktctrl1, pktctrl0, pktlen;
+  byte sync1, sync0;
+  byte addr, channr;
+  byte fsctrl1, fsctrl0;
+  byte freq2, freq1, freq0;
+  byte mdmcfg4, mdmcfg3, mdmcfg2, mdmcfg1, mdmcfg0;
+  byte deviatn;
+  byte mcsm1, mcsm0;
+  byte frend1, frend0;
+  byte fscal3, fscal2, fscal1, fscal0;
+  byte agcctrl2, agcctrl1, agcctrl0;
+  byte marcstate;
+  byte txbytes, rxbytes;
+  int  gdo0val;
+};
 
 #endif // SHARKOS_H

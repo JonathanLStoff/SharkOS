@@ -39,6 +39,7 @@ static const char CMD_SUBGHZ_PLAYBACK_STOP[]  = "subghz.playback.stop";
 static const char CMD_SUBGHZ_PACKET_SEND[] = "subghz.packet.send";
 static const char CMD_SUBGHZ_DISRUPTOR_START[] = "subghz.disruptor.start";
 static const char CMD_SUBGHZ_DISRUPTOR_STOP[]  = "subghz.disruptor.stop";
+static const char CMD_SUBGHZ_TEST[]             = "subghz.test"; // connection self-test between radio1 and radio2
 
 // Oscilloscope / ADC
 static const char CMD_OSCILLOSCOPE_START[] = "oscilloscope.start";
@@ -101,6 +102,7 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_SUBGHZ_PACKET_SEND,
     CMD_SUBGHZ_DISRUPTOR_START,
     CMD_SUBGHZ_DISRUPTOR_STOP,
+    CMD_SUBGHZ_TEST,
     CMD_OSCILLOSCOPE_START,
     CMD_OSCILLOSCOPE_STOP,
     CMD_I2C_SCAN_ONCE,

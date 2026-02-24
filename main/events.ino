@@ -915,6 +915,13 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
     bluetooth_send_response_internal("subghz.top.freq:ok");
     return;
   }
+  if (key == CMD_SUBGHZ_TEST) {
+    Serial.println("[SubGhzTest] CMD_SUBGHZ_TEST received — starting loopback test...");
+    String result = performCc1101TestDetailed();
+    Serial.printf("[SubGhzTest] BLE result: %s\n", result.c_str());
+    bluetooth_send_response_internal(result);
+    return;
+  }
   if (key == CMD_SUBGHZ_SET_BOT_FREQ) {
     if (params && params->containsKey("frequency")) {
       float f = (*params)["frequency"].as<float>();

@@ -98,6 +98,10 @@ fn make_bt_command_map() -> HashMap<String, String> {
         "subghz.disruptor.stop".into(),
         "Stop disruptor. No params.".into(),
     );
+    m.insert(
+        "subghz.test".into(),
+        "Perform self-test between CC1101 radio1 and radio2 at 433MHz. No params.".into(),
+    );
 
     // Oscilloscope / analog sampling (based on oscilloscope.ino)
     m.insert(

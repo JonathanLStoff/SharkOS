@@ -573,7 +573,8 @@ RF24 radio1(CE1_PIN, CSN1_PIN);
 
 // CC1101 module (SmartRC Driver)
 ELECHOUSE_CC1101 cc1101_driver_1;
-// 2nd CC1101 module
+// 2nd CC1101 module — lives on SPI3 (HSPI), pins SCK=5 MISO=4 MOSI=6 CS=17
+SPIClass         cc1101_spi2(HSPI);   // SPI3 peripheral for CC1101 #2
 ELECHOUSE_CC1101 cc1101_driver_2;
 
 // LoRa module — shares global SPI (FSPI) with nRF24, different CS pin (LORA_NSS)
@@ -699,15 +700,20 @@ void deviceSetup() {
   cc1101_driver_1.setSpiPin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, CC1101_1_CS);
   cc1101_driver_1.setGDO(CC1101_1_GDO0, CC1101_1_GDO2);
   cc1101_driver_1.Init();
+  cc1101_driver_1.setCCMode(true);   // IOCFG0=0x06 (sync word indicator) — required for SendData() GDO0 polling
+  cc1101_driver_1.setGDO0(CC1101_1_GDO0);  // re-set GDO0 as INPUT (setGDO sets it as OUTPUT)
   cc1101_driver_1.setMHZ(433.92);
   Serial.println("CC1101 #1 init OK");
   delay(10); // yield to WDT
 
-  // Init CC1101 #2
+  // Init CC1101 #2 — uses its own HSPI (SPI3) bus so it cannot conflict with driver_1's FSPI
   Serial.println("deviceSetup: initializing CC1101 #2");
+  cc1101_driver_2.setSPIBus(&cc1101_spi2);  // assign SPI3 before Init()
   cc1101_driver_2.setSpiPin(CC1101_2_SCK, CC1101_2_MISO, CC1101_2_MOSI, CC1101_2_CS);
   cc1101_driver_2.setGDO(CC1101_2_GDO0, CC1101_2_GDO2);
   cc1101_driver_2.Init();
+  cc1101_driver_2.setCCMode(true);   // IOCFG0=0x06 (sync word indicator) — required for SendData() GDO0 polling
+  cc1101_driver_2.setGDO0(CC1101_2_GDO0);  // re-set GDO0 as INPUT (setGDO sets it as OUTPUT)
   cc1101_driver_2.setMHZ(433.92);
   Serial.println("CC1101 #2 init OK");
 

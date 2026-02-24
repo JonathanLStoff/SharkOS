@@ -150,12 +150,79 @@ function showRadioAlert(messages: string[]) {
   document.body.appendChild(overlay);
 }
 
+// Display sub-ghz radio test results on the status screen (not a popup).
+// Accepts either a parsed JSON object from BLE notification or a GATT-ack string.
+function showSubghzTestResult(data: any) {
+  const content = document.getElementById('status-content');
+  if (!content) return;
+  content.innerHTML = '';
+
+  const addItem = (label: string, val: string, pass: boolean | null) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'padding:10px 12px;background:var(--bg-panel);border:1px solid rgba(255,255,255,0.08);border-radius:8px;font-size:14px;display:flex;justify-content:space-between;align-items:center';
+    const lbl = document.createElement('span');
+    lbl.textContent = label;
+    lbl.style.color = 'var(--text)';
+    const badge = document.createElement('span');
+    badge.textContent = val;
+    badge.style.cssText = 'font-weight:600;padding:2px 8px;border-radius:4px;font-size:13px';
+    if (pass === true) {
+      badge.style.color = '#22c55e';
+      badge.style.background = 'rgba(34,197,94,0.12)';
+    } else if (pass === false) {
+      badge.style.color = '#ef4444';
+      badge.style.background = 'rgba(239,68,68,0.12)';
+    } else {
+      badge.style.color = 'var(--muted)';
+    }
+    div.appendChild(lbl);
+    div.appendChild(badge);
+    content.appendChild(div);
+  };
+
+  // If data is just the GATT ack string (e.g. "sent:subghz.test@..."), show waiting
+  if (typeof data === 'string' && !data.startsWith('{')) {
+    addItem('Sub-GHz Radio Test', 'Running...', null);
+    addItem('Status', 'Waiting for result from device', null);
+    showView('status-screen');
+    return;
+  }
+
+  // Parse JSON if string
+  let obj = data;
+  if (typeof data === 'string') {
+    try { obj = JSON.parse(data); } catch { addItem('Error', 'Invalid response', false); return; }
+  }
+
+  const isPass = (v: string) => v === 'pass';
+  const overall = obj.overall === 'pass';
+
+  const title = document.createElement('h3');
+  title.style.cssText = 'margin:0 0 12px;font-size:16px;text-align:center';
+  title.style.color = overall ? '#22c55e' : '#ef4444';
+  title.textContent = overall ? 'Radio Test PASSED' : 'Radio Test FAILED';
+  content.appendChild(title);
+
+  if (obj.spi1 !== undefined) addItem('SPI Radio 1', obj.spi1.toUpperCase(), isPass(obj.spi1));
+  if (obj.spi2 !== undefined) addItem('SPI Radio 2', obj.spi2.toUpperCase(), isPass(obj.spi2));
+  if (obj.rssi !== undefined) {
+    const delta = obj.rssi_delta !== undefined ? ` (${obj.rssi_delta} dB)` : '';
+    addItem('RSSI Carrier Sense', obj.rssi.toUpperCase() + delta, isPass(obj.rssi));
+  }
+  if (obj.fsk_slow !== undefined) addItem('2-FSK 9.6 kbaud', obj.fsk_slow.toUpperCase(), isPass(obj.fsk_slow));
+  if (obj.fsk_fast !== undefined) addItem('2-FSK 100 kbaud', obj.fsk_fast.toUpperCase(), isPass(obj.fsk_fast));
+  if (obj.ask_slow !== undefined) addItem('ASK 9.6 kbaud', obj.ask_slow.toUpperCase(), isPass(obj.ask_slow));
+
+  showView('status-screen');
+}
+
 // <-- Main menu wiring -->
 type MenuMapEntry = { view: string; chart?: 'signal' | 'channels' | 'sensor' | 'logs'; autoRun?: boolean };
 const menuToTemplate: Record<string, MenuMapEntry> = {
   'wifi': { view: 'wifi-menu' },                             // show Wi‑Fi submenu
   'ble': { view: 'ble-menu' },                               // show BLE submenu
   'subghz': { view: 'sub-ghz-menu' },    // open Sub‑GHz submenu (do not auto-run scanner)
+  'subghz-test': { view: 'status-screen' },
   'nrf-disruptor': { view: 'chart-screen', chart: 'signal' },  // disruptor → signal plot
   'nrf-scanner': { view: 'chart-screen', chart: 'channels' },
   'nfc': { view: 'chart-screen', chart: 'logs' },
@@ -980,6 +1047,9 @@ async function setup() {
       if (action !== 'sub-ghz-scanner') {
         const result = await invoke<string>('run_action', { action, macaddy, params: params ? JSON.stringify(params) : null });
         appendLog(`run_action(${action}, ${macaddy}) => ${result}`);
+        if (action === 'subghz-test') {
+          showSubghzTestResult(result);
+        }
       } else {
         appendLog('sub-ghz scanner ready: press Play to start both radios');
       }
@@ -1447,6 +1517,11 @@ function getBleChannel(freq: number): number | null {
     // if this looks like a status struct, show it and bail out
     if (r && (r.battery_percent !== undefined || r.is_scanning !== undefined)) {
       showStatusObject(r);
+      return;
+    }
+    // if this is a sub-ghz test result, route to test display
+    if (r && r.subghz_test) {
+      showSubghzTestResult(r);
       return;
     }
     if (r && r.type === 'radio-batch' && Array.isArray(r.signals)) {

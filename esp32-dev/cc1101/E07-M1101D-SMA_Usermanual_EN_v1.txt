@@ -1,0 +1,218 @@
+
+
+E07-M1101D-SMA
+
+
+CC1101 433MHz DIP Wireless Module
+目录
+Disclaimer	2
+Introduction	3
+Brief Introduction	3
+Features	3
+Application	3
+Specification and parameter	4
+Limit parameter	4
+Operating parameter	4
+Size and pin definition	5
+Basic operation	6
+Hardware design	6
+Programming	7
+Basic application	7
+Basic circuit	7
+FAQ	8
+Communication range is too short	8
+Module is easy to damage	8
+BER(Bit Error Rate) is high	8
+Production guidance	8
+Reflow soldering temperature	8
+Reflow soldering curve	9
+E07 series	9
+Antenna recommendation	10
+Package for batch order	11
+Revision history	11
+About us	12
+
+
+Disclaimer
+EBYTE reserves all rights to this document and the information contained herein. Products, names, logos and designs described herein may in whole or in part be subject to intellectual property rights. Reproduction, use, modification or disclosure to third parties of this document or any part thereof without the express permission of EBYTE is strictly prohibited.
+The information contained herein is provided “as is” and EBYTE assumes no liability for the use of the information. No warranty, either express or implied, is given, including but not limited, with respect to the accuracy, correctness, reliability and fitness for a particular purpose of the information. This document may be revised by EBYTE at any time. For most recent documents, visit www.ebyte.com.
+Introduction
+
+
+
+
+Brief Introduction
+
+E07-M1101D-SMA is a self-developed, small-size, 433 MHz DIP wireless module with a maximum tx power of 10mW based on CC1101 of Texas Instruments.
+Due to the adoption of the very mature CC1101 as
+the core chip, its stability has been unanimously praised by user. The module is mainly used in smart home, industrial, scientific research and medical, as well as short-range wireless communication equipment. Because RF performance and component selection are in accordance with industrial standards, and the product has obtained FCC, CE, RoHS and other international authority certifications, users do not need to worry about its performance. Extensive hardware support for packet processing, data buffering, burst transmission, Received Signal Strength Indication (RSSI), Clear Channel Assessment (CCA), Link Quality Indication, and Wireless Wake-up (WOR) is available. It uses an industrial grade high precision 26MHz crystal.
+Since the module is a RF transceiver module, user needs to use an MCU to drive or use a dedicated SPI debug tool.
+
+Features
+
+The measured communication distance can reach 1 km;
+Maximum transmission power of 10mW, software multi-level adjustable;
+Support the global license-free ISM 433 MHz band;
+Support air date rate of 0.3kbps～500kbps;
+Support multiple modulation modes (OOK, ASK, GFSK, 2-FSK, 4-FSK and MSK);
+Independent 64-byte RX FIFO and TX FIFO;
+Support 1.8V~3.6V power supply, power supply over 3.3 V can guarantee the best performance;
+Industrial grade standard design, support -40 ~ 85 °C for working over a long time;
+IPEX and stamp hole optional, good for secondary development and integration;
+Support RSSI (received signal strength indication) and LQI (link quality indication);
+It connects to MCU through 4-wire SPI interface, and provides two universal digital output pins with settable functions.
+
+
+
+
+Application
+
+Home security alarm and remote keyless entry;
+Wireless alarm security system;
+Building automation solutions;
+Wireless industrial-grade remote control;
+Health care products;
+Advanced Meter Reading Architecture(AMI);
+Automotive industry applications.
+
+
+Specification and parameter
+
+Limit parameter
+
+
+
+
+Operating parameter
+
+
+
+
+
+
+
+
+Size and pin definition
+
+
+
+
+
+
+Basic operation
+
+Hardware design
+
+It is recommended to use a DC stabilized power supply. The power supply ripple factor is as small as possible and the module needs to be reliably grounded;
+Please pay attention to the correct connection of the positive and negative poles of the power supply, reverse connection may cause permanent damage to the module;
+Please check the power supply to ensure that between the recommended supply voltage, if exceeding the maximum, the module will be permanently damaged;
+Please check the stability of the power supply. Voltage can not fluctuate greatly and frequently;
+When designing the power supply circuit for the module, it is often recommended to reserve more than 30% of the margin, so the whole machine is beneficial for long-term stable operation;
+The module should be as far away as possible from the power supply, transformers, high-frequency wiring and other parts with large electromagnetic interference;
+Bottom LayerHigh-frequency digital routing, high-frequency analog routing, and power routing must be avoided under the module. If it is necessary to pass through the module, assume that the module is soldered to the Top Layer, and the copper is spread on the Top Layer of the module contact part(well grounded), it must be close to the digital part of the module and routed in the Bottom Layer;
+Assuming the module is soldered or placed over the Top Layer, it is wrong to randomly route over the Bottom Layer or other layers, which will affect the module's spurs and receiving sensitivity to varying degrees;
+It is assumed that there are devices with large electromagnetic interference around the module that will greatly affect the performance. It is recommended to keep them away from the module according to the strength of the interference. If necessary, appropriate isolation and shielding can be done;
+Assume that there are traces with large electromagnetic interference (high-frequency digital, high-frequency analog, power traces) around the module that will greatly affect the performance of the module. It is recommended to stay away from the module according to the strength of the interference.If necessary, appropriate isolation and shielding can be done;
+If the communication line uses a 5V level, a 1k-5.1k resistor must be connected in series (not recommended, there is still a risk of damage);
+Try to stay away from some physical layers such as TTL protocol at 2.4GHz , for example: USB3.0;
+The mounting structure of antenna has a great influence on the performance of the module. It is necessary to ensure that the antenna is exposed, preferably vertically upward. When the module is mounted inside the case, use a good antenna extension cable to extend the antenna to the outside;
+The antenna must not be installed inside the metal case, which will cause the transmission distance to be greatly weakened.
+
+
+
+
+Programming
+
+By operating its control register and the transceiver buffer, the wireless data transceiving function can be completed. For the timing operation of the module register read and write operations, please refer to the latest CC1101 data sheet;
+GDO0 is a general I/O port. See CC1101 manual for details;
+GDO2 is generally configured as IRQ function, or it can be disconnected. SPI query mode can be used to obtain interrupt status, but it is recommended to use external interrupt of MCU;
+After the CC1101 recovers the IDLE mode or configures the sleep mode, it is recommended to reinitialize the power configuration table.
+
+
+
+Basic application
+
+Basic circuit
+
+
+FAQ
+
+Communication range is too short
+
+The communication distance will be affected when obstacle exists;
+Data lose rate will be affected by temperature, humidity and co-channel interference;
+The ground will absorb and reflect wireless radio wave, so the performance will be poor when testing near ground;
+Sea water has great ability in absorbing wireless radio wave, so performance will be poor when testing near the sea;
+The signal will be affected when the antenna is near metal object or put in a metal case;
+Power register was set incorrectly, air data rate is set as too high (the higher the air data rate, the shorter the distance);
+The power supply low voltage under room temperature is lower than 2.5V, the lower the voltage, the lower the transmitting power;
+Due to antenna quality or poor matching between antenna and module.
+
+Module is easy to damage
+
+Please check the power supply source, ensure it is 2.0V~3.6V, voltage higher than 3.6V will damage the module;
+Please check the stability of power source, the voltage cannot fluctuate too much;
+Please make sure antistatic measure are taken when installing and using, high frequency devices have electrostatic susceptibility;
+Please ensure the humidity is within limited range, some parts are sensitive to humidity;
+Please avoid using modules under too high or too low temperature.
+
+BER(Bit Error Rate) is high
+
+There are co-channel signal interference nearby, please be away from interference sources or modify frequency and channel to avoid interference;
+Poor power supply may cause messy code. Make sure that the power supply is reliable;
+The extension line and feeder quality are poor or too long, so the bit error rate is high.
+
+
+
+Production guidance
+
+Reflow soldering temperature
+
+
+
+
+
+Reflow soldering curve
+
+
+
+E07 series
+
+
+
+
+
+
+
+
+Antenna recommendation
+The antenna is an important role in the communication process. A good antenna can largely improve the communication system. Therefore, we recommend some antennas for wireless modules with excellent performance and reasonable price.
+
+
+Package for batch order
+
+
+
+
+
+
+
+
+
+
+
+
+
+Revision history
+
+
+
+About us
+
+Technical support: support@cdebyte.com
+Documents and RF Setting download link: www.ebyte.com
+Thank you for using Ebyte products! Please contact us with any questions or suggestions: info@cdebyte.com
+
+Fax: 028-64146160 ext. 821
+Web: www.ebyte.com
+Address: Innovation Center D347, 4# XI-XIN Road,Chengdu, Sichuan, China

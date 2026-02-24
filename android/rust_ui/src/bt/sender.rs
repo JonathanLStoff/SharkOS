@@ -37,6 +37,7 @@ fn translate_action_to_bt(action: &str) -> Option<&'static str> {
         ("sub-ghz-recorder", "subghz.record.start"),
         ("sub-ghz-packet-sender", "subghz.packet.send"),
         ("sub-ghz-disruptor", "subghz.disruptor.start"),
+        ("subghz-test", "subghz.test"),
         ("oscilloscope", "oscilloscope.start"),
         ("oscilloscope-stop", "oscilloscope.stop"),
         ("i2c-scanner", "i2c.scan.once"),
