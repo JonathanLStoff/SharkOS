@@ -1537,17 +1537,27 @@ function getBleChannel(freq: number): number | null {
 
   // Listen on the Tauri event bus (emitted from Rust backend)
   await listen<any>('radio-signal', (event) => {
-    if (!isPlaying) return;
-    try { handleRadioSignalData(event.payload); } catch (err) { error('radio-signal (tauri) error: '+String(err)); }
+    // Always process subghz test results even when not playing
+    const p = event.payload;
+    if (!isPlaying && !(p && typeof p === 'object' && p.subghz_test)) return;
+    try { handleRadioSignalData(p); } catch (err) { error('radio-signal (tauri) error: '+String(err)); }
   });
 
   // Listen on window CustomEvents (dispatched by handleRadioNotification in
   // MainActivity.kt via evaluateJavascript). This is the primary path on
   // Android when BLE notifications arrive.
   window.addEventListener('radio-signal', (ev: Event) => {
-    if (!isPlaying) return;
+    const detail = (ev as CustomEvent).detail;
+    // Always process subghz test results even when not playing
+    if (!isPlaying) {
+      // Parse string payloads to check for subghz_test
+      let parsed = detail;
+      if (typeof detail === 'string' && detail.trimStart().startsWith('{')) {
+        try { parsed = JSON.parse(detail); } catch {}
+      }
+      if (!(parsed && typeof parsed === 'object' && parsed.subghz_test)) return;
+    }
     try {
-      const detail = (ev as CustomEvent).detail;
       handleRadioSignalData(detail);
     } catch (err) { error('radio-signal (window) error: '+String(err)); }
   });
