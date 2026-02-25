@@ -10,41 +10,19 @@ import { currentMonitor } from '@tauri-apps/api/window';
 // screenSize value via a small helper.
 let monitor: any = null;
 
-// mutable screenSize object so we can recalc when monitor info becomes
-// available.  For callers we expose a simple getter function below that
-// always returns the current value.
-let screenSize = (function calculateSize() {
-  // prefer monitor info when it has resolved
-  if (monitor && monitor.size && typeof monitor.size.width === 'number' && typeof monitor.size.height === 'number') {
-    return { width: Math.floor(monitor.size.width), height: Math.floor(monitor.size.height) };
-  }
-  try {
-    if (window.screen && typeof window.screen.width === 'number') {
-      return { width: Math.floor(window.screen.width), height: Math.floor(window.screen.height) };
-    }
-  } catch (e) {
-    // defensive: fall through to other viewport options
-  }
-  if (window.visualViewport) {
-    return { width: Math.floor(window.visualViewport.width), height: Math.floor(window.visualViewport.height) };
-  }
-  return { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
-})();
+// Use CSS-viewport dimensions (logical pixels).  `currentMonitor()` returns
+// physical pixels which are 2-3x larger on high-DPI Android screens and
+// caused the app/charts to overflow the visible area.
+let screenSize = { width: window.innerWidth, height: window.innerHeight };
 
-function updateScreenSizeFromMonitor() {
-  if (monitor && monitor.size && typeof monitor.size.width === 'number' && typeof monitor.size.height === 'number') {
-    screenSize = { width: Math.floor(monitor.size.width), height: Math.floor(monitor.size.height) };
-    const app = document.querySelector('.app') as HTMLElement | null;
-    if (app) {
-      app.style.width = `${screenSize.width}px`;
-      app.style.height = `${screenSize.height}px`;
-      app.style.maxWidth = `${screenSize.width}px`;
-      app.style.maxHeight = `${screenSize.height}px`;
-    }
-  }
+function updateScreenSize() {
+  screenSize = { width: window.innerWidth, height: window.innerHeight };
+  // let CSS 100vw/100vh handle the .app container — no JS override needed
 }
 
-currentMonitor().then(m => { monitor = m; updateScreenSizeFromMonitor(); }).catch(() => { monitor = null; });
+// recalc on orientation change or resize
+window.addEventListener('resize', updateScreenSize);
+currentMonitor().then(m => { monitor = m; /* logged only, no sizing */ }).catch(() => { monitor = null; });
 
 
 
@@ -335,13 +313,7 @@ function createSignalChart() {
     // Create a single, empty line dataset for stability (no initial bars/spikes)
     // Animation is disabled to avoid intermittent crashes on some devices.
     // @ts-ignore global Chart
-    // Ensure chart canvas uses exact app viewport size (avoid ~5px overshoot)
-    const cw = Math.max(0, screenSize.width - 5);
-    const chPx = Math.max(0, screenSize.height - 5);
-    c.style.width = `${cw}px`;
-    c.style.height = `${chPx}px`;
-    c.width = cw;
-    c.height = chPx;
+    // Let Chart.js responsive mode size the canvas to its container
     const chart = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'line',
       data: {
@@ -403,14 +375,7 @@ function createChannelsChart() {
     // I will use a Bar chart with data points {x: channel, y: strength, ssid: string}.
 
     // @ts-ignore global Chart
-    // Ensure chart canvas uses exact app viewport size (avoid ~5px overshoot)
-    const cw = Math.max(0, screenSize.width - 5);
-    const chPx = Math.max(0, screenSize.height - 5);
-    info(`createChannelsChart: initializing with canvas size ${cw}x${chPx}`);
-    c.style.width = `${cw}px`;
-    c.style.height = `${chPx}px`;
-    c.width = cw;
-    c.height = chPx;
+    // Let Chart.js responsive mode size the canvas to its container
     const chart = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'bar',
       data: { 
@@ -613,10 +578,11 @@ function setPlaying(val: boolean) {
       const mod2el = document.getElementById('subghzModSelect2') as HTMLSelectElement | null;
 
       // Read values (MHz) or fall back to sensible defaults
-      let f1 = in1 ? Number(in1.value || in1.defaultValue || '400') : NaN;
-      let f2 = in2 ? Number(in2.value || in2.defaultValue || '433') : NaN;
-      if (isNaN(f1)) f1 = 400;
-      if (isNaN(f2)) f2 = 433;
+      // in1 = subghzFreqInput1 = HIGH (433 default), in2 = subghzFreqInput2 = LOW (400 default)
+      let f1 = in1 ? Number(in1.value || in1.defaultValue || '433') : NaN;
+      let f2 = in2 ? Number(in2.value || in2.defaultValue || '400') : NaN;
+      if (isNaN(f1)) f1 = 433;
+      if (isNaN(f2)) f2 = 400;
 
       // Read modulation choices
       const m1 = (mod1el && mod1el.value) ? mod1el.value : 'OOK';
@@ -642,12 +608,13 @@ function setPlaying(val: boolean) {
       // Enforce maximum span (MHz)
       const MAX_SPAN_MHZ = 33;
       if (Math.abs(f1 - f2) > MAX_SPAN_MHZ) {
-        // Keep f1 as the "high" value and adjust the other so span <= MAX_SPAN_MHZ
+        // f1=High, f2=Low; adjust the low end (f2) to keep span within limit
         if (f1 > f2) {
           f2 = f1 - MAX_SPAN_MHZ;
           if (in2) in2.value = String(Math.round(f2*10)/10);
         } else {
-          f1 = f2 - MAX_SPAN_MHZ;
+          // f2 is somehow higher than f1 (shouldn't happen but be safe)
+          f1 = f2 + MAX_SPAN_MHZ;
           if (in1) in1.value = String(Math.round(f1*10)/10);
         }
       }
@@ -913,13 +880,7 @@ async function setup() {
   sensorChart = (function initSensor(){
     const ctx = document.getElementById('sensorChart') as HTMLCanvasElement | null;
     if (!ctx) return null;
-    // Ensure chart canvas uses exact app viewport size (avoid ~5px overshoot)
-    const cw = Math.max(0, screenSize.width - 5);
-    const ch = Math.max(0, screenSize.height - 5);
-    ctx.style.width = `${cw}px`;
-    ctx.style.height = `${ch}px`;
-    ctx.width = cw;
-    ctx.height = ch;
+    // Let Chart.js responsive mode size the canvas to its container
     return new Chart(ctx, {
       type: 'line',
       data: { labels: [], datasets: [
@@ -1138,18 +1099,16 @@ async function setup() {
   const subFreqUp2 = document.getElementById('subghzFreqUp2') as HTMLButtonElement | null;
   const subFreqDown2 = document.getElementById('subghzFreqDown2') as HTMLButtonElement | null;
   if (subFreqUp1 && subFreqDown1 && subFreqInput1) {
-    const step = parseFloat(subFreqInput1.step || '0.1');
-    subFreqUp1.addEventListener('click', () => { try { subFreqInput1.stepUp(); } catch(e){error(String(e));} });
-    subFreqDown1.addEventListener('click', () => { try { subFreqInput1.stepDown(); } catch(e){error(String(e));} });
+    subFreqUp1.addEventListener('click', () => { try { subFreqInput1.stepUp(); subFreqInput1.dispatchEvent(new Event('change')); } catch(e){error(String(e));} });
+    subFreqDown1.addEventListener('click', () => { try { subFreqInput1.stepDown(); subFreqInput1.dispatchEvent(new Event('change')); } catch(e){error(String(e));} });
     subFreqInput1.addEventListener('keydown', (ev) => {
-      if (ev.key === 'ArrowUp') {/* Line 670 omitted */}
-      if (ev.key === 'ArrowDown') {/* Line 671 omitted */}
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); subFreqUp1.click(); }
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); subFreqDown1.click(); }
     });
   }
   if (subFreqUp2 && subFreqDown2 && subFreqInput2) {
-    const step = parseFloat(subFreqInput2.step || '0.1');
-    subFreqUp2.addEventListener('click', () => { try { subFreqInput2.stepUp(); } catch(e){error(String(e));} });
-    subFreqDown2.addEventListener('click', () => { try { subFreqInput2.stepDown(); } catch(e){error(String(e));} });
+    subFreqUp2.addEventListener('click', () => { try { subFreqInput2.stepUp(); subFreqInput2.dispatchEvent(new Event('change')); } catch(e){error(String(e));} });
+    subFreqDown2.addEventListener('click', () => { try { subFreqInput2.stepDown(); subFreqInput2.dispatchEvent(new Event('change')); } catch(e){error(String(e));} });
     subFreqInput2.addEventListener('keydown', (ev) => {
       if (ev.key === 'ArrowUp') { ev.preventDefault(); subFreqUp2.click(); }
       if (ev.key === 'ArrowDown') { ev.preventDefault(); subFreqDown2.click(); }
@@ -1157,27 +1116,37 @@ async function setup() {
   }
 
   // 3. Frequency Coupling Logic (enforce max 33 MHz diff)
+  // Only runs on 'change' (blur / Enter) so we don't spam BLE mid-edit.
+  // NOTE: Input1 = HIGH (top), Input2 = LOW (bottom)
   const enforceFreqCoupling = (changed: '1'|'2') => {
     if (!subFreqInput1 || !subFreqInput2) return;
-    const v1 = parseFloat(subFreqInput1.value);
-    const v2 = parseFloat(subFreqInput2.value);
-    if (isNaN(v1) || isNaN(v2)) return;
+    let hi = parseFloat(subFreqInput1.value); // Input1 = High
+    let lo = parseFloat(subFreqInput2.value); // Input2 = Low
+    if (isNaN(hi) || isNaN(lo)) return;
+
+    // Enforce: High must always be >= Low
+    if (hi < lo) {
+      const tmp = hi; hi = lo; lo = tmp;
+      subFreqInput1.value = hi.toFixed(1);
+      subFreqInput2.value = lo.toFixed(1);
+    }
+
+    // Enforce max 33 MHz span
     const MAX_DIFF = 33;
-    if (Math.abs(v2 - v1) > MAX_DIFF) {
-      if (changed === '2') { 
-         // 2 changed (Top/High), move 1 (Bottom/Low)
-         if (v2 > v1 + MAX_DIFF) subFreqInput1.value = (v2 - MAX_DIFF).toFixed(1);
-         else if (v2 < v1 - MAX_DIFF) subFreqInput1.value = (v2 + MAX_DIFF).toFixed(1);
-      } else { 
-         // 1 changed (Bottom/Low), move 2
-         if (v2 > v1 + MAX_DIFF) subFreqInput2.value = (v1 + MAX_DIFF).toFixed(1);
-         else if (v2 < v1 - MAX_DIFF) subFreqInput2.value = (v1 - MAX_DIFF).toFixed(1);
+    if (hi - lo > MAX_DIFF) {
+      if (changed === '1') {
+         // High changed — pull Low up
+         lo = hi - MAX_DIFF;
+         subFreqInput2.value = lo.toFixed(1);
+      } else {
+         // Low changed — pull High down
+         hi = lo + MAX_DIFF;
+         subFreqInput1.value = hi.toFixed(1);
       }
     }
-    // always update chart range
-    const n1 = parseFloat(subFreqInput1.value);
-    const n2 = parseFloat(subFreqInput2.value);
-    setChartRange('channels', Math.floor(Math.min(n1,n2)), Math.ceil(Math.max(n1,n2)));
+
+    // Update chart range (lo → hi)
+    setChartRange('channels', Math.floor(lo), Math.ceil(hi));
     configureChannelsChartForAction('sub-ghz-scanner');
     if (channelsChart && !channelUpdateScheduled) {
        channelUpdateScheduled = true;
@@ -1186,13 +1155,16 @@ async function setup() {
           channelUpdateScheduled = false;
        }, 100);
     }
+
+    // Restart scan (debounced) so device picks up new range
     if (isPlaying && currentAction === 'sub-ghz-scanner') {
        if (freqRestartTimer) clearTimeout(freqRestartTimer);
-       freqRestartTimer = setTimeout(() => { setPlaying(false); setPlaying(true); }, 200);
+       freqRestartTimer = setTimeout(() => { setPlaying(false); setTimeout(() => setPlaying(true), 400); }, 500);
     }
   };
-  if (subFreqInput1) subFreqInput1.addEventListener('input', () => enforceFreqCoupling('1'));
-  if (subFreqInput2) subFreqInput2.addEventListener('input', () => enforceFreqCoupling('2'));
+  // 'change' fires on blur / Enter — NOT on every keystroke
+  if (subFreqInput1) subFreqInput1.addEventListener('change', () => enforceFreqCoupling('1'));
+  if (subFreqInput2) subFreqInput2.addEventListener('change', () => enforceFreqCoupling('2'));
 
   // modality change listener for LoRa enforcement & defaults
   const mod1el = document.getElementById('subghzModSelect1') as HTMLSelectElement | null;
@@ -1204,6 +1176,18 @@ async function setup() {
   async function notifyModulationChange(idx: number, value: string) {
     const macaddy = loadSavedBTDevice()?.mac || '';
     if (!macaddy) return;
+
+    const wasScanning = isPlaying && currentAction === 'sub-ghz-scanner';
+
+    // If we were scanning, pause so the radio isn't mid-sweep when we change mod.
+    if (wasScanning) {
+      appendLog('[sub-ghz] pausing scan to change modulation');
+      setPlaying(false);
+      // give device time to settle
+      await new Promise(r => setTimeout(r, 700));
+    }
+
+    // Send the modulation change command
     const action = idx === 1 ? 'subghz.set.mod.one' : 'subghz.set.mod.two';
     try {
       await invoke<string>('run_action', { action, macaddy, params: JSON.stringify({ modulation: value }) });
@@ -1212,13 +1196,11 @@ async function setup() {
       error(`[sub-ghz] failed to send ${action}: ${String(e)}`);
     }
 
-    // if a sub-ghz scan is currently running, restart it so the new
-    // modulation takes effect immediately.  toggling play forces a fresh
-    // start and also clears the chart (expected).  We could be smarter
-    // about preserving frequency range but this is the simplest.
-    if (isPlaying && currentAction === 'sub-ghz-scanner') {
-      setPlaying(false);
-      setTimeout(() => setPlaying(true), 200);
+    // If we paused earlier, resume the scan now that modulation change is done
+    if (wasScanning) {
+      appendLog('[sub-ghz] resuming scan with updated modulation');
+      await new Promise(r => setTimeout(r, 700));
+      setPlaying(true);
     }
   }
   function updateModState() {

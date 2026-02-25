@@ -26,9 +26,10 @@
         font-family: 'SpaceGrotesk', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       }
 
-      html,body{height:100%;margin:0;background:var(--bg);color:var(--text)}
+      *,*::before,*::after{box-sizing:border-box}
+      html,body{height:100%;margin:0;padding:0;overflow:hidden;background:var(--bg);color:var(--text)}
       /* constrain app to viewport so chart pages fit the device */
-      .app{height:100vh;width:100vw;max-width:none;margin:0 auto;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:0;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;}
+      .app{height:100vh;width:100vw;max-width:100vw;max-height:100vh;margin:0;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:0;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;}
       header{flex:0 0 auto}
       header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
       header h1{margin:0;font-size:20px;color:var(--accent)}
@@ -49,14 +50,14 @@
 
       /* Chart / templates */
       #chart-screen{display:flex;flex:1;gap:12px;min-height:0;overflow:hidden}
-      .panels{background:var(--bg-panel);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.03);box-sizing:border-box;display:flex;flex-direction:column;min-height:0}
-      .chart-main{flex:2;min-width:0}
-      .log-panel{flex:1;min-width:0}
-      /* make chart canvas area scrollable/zoomable but allow it to stretch to available space */
-      .chart-canvas{display:block;width:100%;height:100%;background:transparent}
-      .chart-inner{min-width:100%;width:100%;flex:1;min-height:0;display:block}
-      .zoom-container{overflow:auto;flex:1;min-height:0}
-      .zoomable-container canvas{transform-origin:center center;height:100%}
+      .panels{background:var(--bg-panel);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.03);box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+      .chart-main{flex:2;min-width:0;min-height:0}
+      .log-panel{flex:1;min-width:0;min-height:0}
+      /* Chart.js needs a position:relative wrapper with bounded height to size correctly */
+      .chart-canvas{display:block;background:transparent}
+      .chart-inner{position:relative;width:100%;flex:1;min-height:0}
+      .zoom-container{overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column}
+      .zoomable-container canvas{transform-origin:center center}
       #cell-scan-output{flex:1;min-height:0;overflow:auto;font-family:monospace;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
       .small-ctrl{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);cursor:pointer;margin:0 6px;font-weight:700}
       .hidden{display:none}
@@ -68,7 +69,7 @@
       .submenu.wifi .menu-btn{border-color:var(--danger)}
 
       /* Responsive */
-      @media(max-width:900px){#chart-screen{flex-direction:column} .chart-canvas{height:180px} .chart-main,.log-panel{flex:1}} 
+      @media(max-width:900px){#chart-screen{flex-direction:column} .chart-main,.log-panel{flex:1}} 
       /* Ensure chart-screen children can shrink inside flex container */
       #chart-screen{min-height:0}
       .panels{overflow:hidden}
@@ -293,7 +294,7 @@
       <section id="sensor-panel" style="margin-top:14px" class="hidden" hidden=true>
         <div class="panels">
           <h3 style="margin-top:0;color:var(--muted)">Sensor Live (accelerometer)</h3>
-          <div id="chart-container"><canvas id="sensorChart" class="chart-canvas"></canvas></div>
+          <div id="chart-container" style="position:relative;flex:1;min-height:0"><canvas id="sensorChart" class="chart-canvas"></canvas></div>
         </div>
       </section>
 
