@@ -34,6 +34,13 @@ let screenSize = (function calculateSize() {
 function updateScreenSizeFromMonitor() {
   if (monitor && monitor.size && typeof monitor.size.width === 'number' && typeof monitor.size.height === 'number') {
     screenSize = { width: Math.floor(monitor.size.width), height: Math.floor(monitor.size.height) };
+    const app = document.querySelector('.app') as HTMLElement | null;
+    if (app) {
+      app.style.width = `${screenSize.width}px`;
+      app.style.height = `${screenSize.height}px`;
+      app.style.maxWidth = `${screenSize.width}px`;
+      app.style.maxHeight = `${screenSize.height}px`;
+    }
   }
 }
 
@@ -434,8 +441,18 @@ function createChannelsChart() {
           y: { 
             display: true, 
             title: { display: true, text: 'Signal Strength (RSSI dBm)' },
-            min: -100,
-            max: 0
+            // We map RSSI (-100..0) to 0..100 so bars grow upward.  Axis ticks
+            // show the original negative values via callback.
+            min: 0,
+            max: 100,
+            ticks: {
+              stepSize: 20,
+              callback: (val: any) => {
+                // val runs 0..100; convert back to dBm
+                const dbm = (val as number) - 100;
+                return dbm.toString();
+              }
+            }
           }
         },
         plugins: {
@@ -444,9 +461,18 @@ function createChannelsChart() {
             callbacks: {
               label: (ctx: any) => {
                 const raw = ctx.raw as any;
+                const rssi = (typeof raw.y === 'number') ? (raw.y - 100) : raw.y;
+                if (currentAction?.startsWith('sub-ghz')) {
+                  return [
+                    `Modulation: ${raw.modulation || 'Unknown'}`,
+                    `Freq: ${raw.x} MHz`,
+                    `Data Len: ${raw.dataLen ?? 0}`,
+                    `RSSI: ${rssi} dBm`
+                  ];
+                }
                 const label = raw.ssid || 'Unknown';
-                const xLabel = currentAction?.startsWith('sub-ghz') ? `${raw.x} MHz` : `Ch ${raw.x}`;
-                return `${label} @ ${xLabel}: ${raw.y} dBm`;
+                const xLabel = `Ch ${raw.x}`;
+                return `${label} @ ${xLabel}: ${rssi} dBm`;
               }
             }
           }
@@ -843,6 +869,17 @@ function hideDevicePicker() {
 // <-- initialize UI & listeners -->
 async function setup() {
   info('setup: initializing UI');
+  // count incoming packets and throttle chart redraws
+  let packetCounter = 0;
+  let channelUpdateScheduled = false;
+  let freqRestartTimer: number | null = null;
+  setInterval(() => {
+    if (packetCounter > 0) {
+      console.debug(`[radio] packets last 10s: ${packetCounter}`);
+      packetCounter = 0;
+    }
+  }, 10000);
+
   // orient app to landscape (either primary or secondary).
   if (screen.orientation && screen.orientation.lock) {
     screen.orientation.lock('landscape').catch(e => {
@@ -1114,10 +1151,48 @@ async function setup() {
     subFreqUp2.addEventListener('click', () => { try { subFreqInput2.stepUp(); } catch(e){error(String(e));} });
     subFreqDown2.addEventListener('click', () => { try { subFreqInput2.stepDown(); } catch(e){error(String(e));} });
     subFreqInput2.addEventListener('keydown', (ev) => {
-      if (ev.key === 'ArrowUp') {/* Line 670 omitted */}
-      if (ev.key === 'ArrowDown') {/* Line 671 omitted */}
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); subFreqUp2.click(); }
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); subFreqDown2.click(); }
     });
   }
+
+  // 3. Frequency Coupling Logic (enforce max 33 MHz diff)
+  const enforceFreqCoupling = (changed: '1'|'2') => {
+    if (!subFreqInput1 || !subFreqInput2) return;
+    const v1 = parseFloat(subFreqInput1.value);
+    const v2 = parseFloat(subFreqInput2.value);
+    if (isNaN(v1) || isNaN(v2)) return;
+    const MAX_DIFF = 33;
+    if (Math.abs(v2 - v1) > MAX_DIFF) {
+      if (changed === '2') { 
+         // 2 changed (Top/High), move 1 (Bottom/Low)
+         if (v2 > v1 + MAX_DIFF) subFreqInput1.value = (v2 - MAX_DIFF).toFixed(1);
+         else if (v2 < v1 - MAX_DIFF) subFreqInput1.value = (v2 + MAX_DIFF).toFixed(1);
+      } else { 
+         // 1 changed (Bottom/Low), move 2
+         if (v2 > v1 + MAX_DIFF) subFreqInput2.value = (v1 + MAX_DIFF).toFixed(1);
+         else if (v2 < v1 - MAX_DIFF) subFreqInput2.value = (v1 - MAX_DIFF).toFixed(1);
+      }
+    }
+    // always update chart range
+    const n1 = parseFloat(subFreqInput1.value);
+    const n2 = parseFloat(subFreqInput2.value);
+    setChartRange('channels', Math.floor(Math.min(n1,n2)), Math.ceil(Math.max(n1,n2)));
+    configureChannelsChartForAction('sub-ghz-scanner');
+    if (channelsChart && !channelUpdateScheduled) {
+       channelUpdateScheduled = true;
+       setTimeout(() => {
+          channelsChart?.update();
+          channelUpdateScheduled = false;
+       }, 100);
+    }
+    if (isPlaying && currentAction === 'sub-ghz-scanner') {
+       if (freqRestartTimer) clearTimeout(freqRestartTimer);
+       freqRestartTimer = setTimeout(() => { setPlaying(false); setPlaying(true); }, 200);
+    }
+  };
+  if (subFreqInput1) subFreqInput1.addEventListener('input', () => enforceFreqCoupling('1'));
+  if (subFreqInput2) subFreqInput2.addEventListener('input', () => enforceFreqCoupling('2'));
 
   // modality change listener for LoRa enforcement & defaults
   const mod1el = document.getElementById('subghzModSelect1') as HTMLSelectElement | null;
@@ -1125,6 +1200,27 @@ async function setup() {
   // Default modulation profile for scanner start: radio-1 OOK, radio-2 2-FSK.
   if (mod1el && !mod1el.value) mod1el.value = 'OOK';
   if (mod2el && mod2el.value === 'OOK') mod2el.value = '2-FSK';
+  // helper that also notifies the device of changes via BLE
+  async function notifyModulationChange(idx: number, value: string) {
+    const macaddy = loadSavedBTDevice()?.mac || '';
+    if (!macaddy) return;
+    const action = idx === 1 ? 'subghz.set.mod.one' : 'subghz.set.mod.two';
+    try {
+      await invoke<string>('run_action', { action, macaddy, params: JSON.stringify({ modulation: value }) });
+      appendLog(`[sub-ghz] sent ${action} modulation=${value}`);
+    } catch (e) {
+      error(`[sub-ghz] failed to send ${action}: ${String(e)}`);
+    }
+
+    // if a sub-ghz scan is currently running, restart it so the new
+    // modulation takes effect immediately.  toggling play forces a fresh
+    // start and also clears the chart (expected).  We could be smarter
+    // about preserving frequency range but this is the simplest.
+    if (isPlaying && currentAction === 'sub-ghz-scanner') {
+      setPlaying(false);
+      setTimeout(() => setPlaying(true), 200);
+    }
+  }
   function updateModState() {
     const m1 = mod1el?.value || '';
     const m2 = mod2el?.value || '';
@@ -1136,13 +1232,21 @@ async function setup() {
       if (subFreqInput2) subFreqInput2.value = '900.0';
     } else {
       if (mod2el) mod2el.disabled = false;
-      // restore sensible defaults if we were previously in LoRa band
       if (subFreqInput1 && parseFloat(subFreqInput1.value) > 900) subFreqInput1.value = '433.0';
       if (subFreqInput2 && parseFloat(subFreqInput2.value) > 900) subFreqInput2.value = '400.0';
     }
   }
-  mod1el?.addEventListener('change', updateModState);
-  mod2el?.addEventListener('change', updateModState);
+  mod1el?.addEventListener('change', () => {
+    // Only apply LoRa enforcement if explicit LoRa selection
+    const val = mod1el?.value || '';
+    if (val === 'LoRa') updateModState(); 
+    notifyModulationChange(1, val);
+  });
+  mod2el?.addEventListener('change', () => {
+    const val = mod2el?.value || '';
+    if (val === 'LoRa') updateModState();
+    notifyModulationChange(2, val);
+  });
   // enforce any initial constraints/defaults
   updateModState();
 
@@ -1444,7 +1548,10 @@ function getBleChannel(freq: number): number | null {
           // Bar chart: x=Channel, y=Signal Strength (RSSI)
           // SSID stored in `ssid` property for tooltip
           // Use RSSI directly for Y-axis since chart range is -100 to 0
-          const strength = s.rssi ?? -100;
+          // convert RSSI (-100..0) to positive strength 0..100
+          let strength = (s.rssi !== undefined && s.rssi !== null) ? Math.round(100 + s.rssi) : 0;
+          if (strength < 0) strength = 0;
+          if (strength > 100) strength = 100;
           // Build label: <extra> [payload-as-string]
           let payloadStr = '';
           if (s.payload) {
@@ -1460,11 +1567,27 @@ function getBleChannel(freq: number): number | null {
                 payloadStr = new TextDecoder().decode(arr);
               }
             } catch (e) {
+              // if decoding fails just keep the raw payload string
               payloadStr = String(s.payload);
             }
           }
+
           const ssid = `${s.extra || 'Unknown'} ${payloadStr ? '['+payloadStr+']' : ''}`;
-          
+
+          let mod = 'Unknown';
+          if (currentAction === 'sub-ghz-scanner') {
+             const m1 = (document.getElementById('subghzModSelect1') as HTMLSelectElement)?.value || 'OOK';
+             const m2 = (document.getElementById('subghzModSelect2') as HTMLSelectElement)?.value || '2-FSK';
+             if (s.module === 0) mod = m1;
+             else if (s.module === 1) mod = m2;
+          }
+          let dataLen = 0;
+          if (typeof s.payload === 'string') {
+             try { dataLen = atob(s.payload).length; } catch { dataLen = s.payload.length; }
+          } else if (Array.isArray(s.payload)) {
+             dataLen = s.payload.length;
+          }
+
           console.debug('[chart] updating channel', channel, 'with ssid', ssid, 'strength', strength);
 
           // Check if we already have this SSID on this channel to update it instead of adding redundant bars
@@ -1477,11 +1600,13 @@ function getBleChannel(freq: number): number | null {
 
           if (existingIdx >= 0) {
              dataArr[existingIdx].y = strength;
+             dataArr[existingIdx].modulation = mod;
+             dataArr[existingIdx].dataLen = dataLen;
              // update color as well
              const bc = ds.backgroundColor as any[];
              if (bc && bc.length > existingIdx) bc[existingIdx] = barColor;
           } else {
-             dataArr.push({ x: channel, y: strength, ssid: ssid, module: s.module });
+             dataArr.push({ x: channel, y: strength, ssid: ssid, module: s.module, modulation: mod, dataLen: dataLen });
              // append color slot
              const bc = ds.backgroundColor as any[];
              if (bc) bc.push(barColor);
@@ -1490,14 +1615,20 @@ function getBleChannel(freq: number): number | null {
           // keep reasonable history? No, for bar chart we want current snapshot.
           // Maybe clear old ones?
           // We can remove items that haven't been updated recently if we tracked timestamp.
-          // For now, let's just limit total count to avoid memory leaks if scanning 100s of APs.
-          if (dataArr.length > 200) {
-             // remove oldest? or random?
-             // Ideally we'd remove by timestamp. Simple shift is okay for now.
+          // for most scans we never trim; only trim if not doing a sub-ghz sweep so
+          // the UI doesn't grow without bound when scanning Wi‑Fi/other large
+          // ranges.
+          if (!currentAction?.startsWith('sub-ghz') && dataArr.length > 200) {
+             // remove oldest entry to limit memory usage
              dataArr.shift();
           }
-          
-          channelsChart.update();
+          if (!channelUpdateScheduled) {
+             channelUpdateScheduled = true;
+             setTimeout(() => {
+               channelsChart?.update();
+               channelUpdateScheduled = false;
+             }, 100);
+          }
         } catch (e) { error('channelsChart update failed: '+String(e)); }
       }
       if (isRecording) recordedEvents.push({ type: 'radio-signal', payload: s, ts: Date.now() });
@@ -1537,6 +1668,7 @@ function getBleChannel(freq: number): number | null {
 
   // Listen on the Tauri event bus (emitted from Rust backend)
   await listen<any>('radio-signal', (event) => {
+    packetCounter++;
     // Always process subghz test results even when not playing
     const p = event.payload;
     if (!isPlaying && !(p && typeof p === 'object' && p.subghz_test)) return;
@@ -1547,6 +1679,7 @@ function getBleChannel(freq: number): number | null {
   // MainActivity.kt via evaluateJavascript). This is the primary path on
   // Android when BLE notifications arrive.
   window.addEventListener('radio-signal', (ev: Event) => {
+    packetCounter++;
     const detail = (ev as CustomEvent).detail;
     // Always process subghz test results even when not playing
     if (!isPlaying) {
