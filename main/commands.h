@@ -21,6 +21,10 @@ static const char CMD_WIFI_CHANNEL_SCAN[]  = "wifi.channel.scan";
 static const char CMD_WIFI_SNIFFER_START[] = "wifi.sniffer.start";
 static const char CMD_WIFI_SNIFFER_STOP[]  = "wifi.sniffer.stop";
 
+// Wi‑Fi promiscuous capture (Wireshark-like)
+static const char CMD_WIFI_CAPTURE_START[] = "wifi.capture.start";
+static const char CMD_WIFI_CAPTURE_STOP[]  = "wifi.capture.stop";
+
 // nRF (2.4GHz)
 static const char CMD_NRF_SCAN_START[] = "nrf.scan.start";
 static const char CMD_NRF_SCAN_STOP[]  = "nrf.scan.stop";
@@ -39,6 +43,8 @@ static const char CMD_SUBGHZ_PLAYBACK_STOP[]  = "subghz.playback.stop";
 static const char CMD_SUBGHZ_PACKET_SEND[] = "subghz.packet.send";
 static const char CMD_SUBGHZ_DISRUPTOR_START[] = "subghz.disruptor.start";
 static const char CMD_SUBGHZ_DISRUPTOR_STOP[]  = "subghz.disruptor.stop";
+static const char CMD_SUBGHZ_SMART_DISRUPTOR_START[] = "subghz.smart.disruptor.start";
+static const char CMD_SUBGHZ_SMART_DISRUPTOR_STOP[]  = "subghz.smart.disruptor.stop";
 static const char CMD_SUBGHZ_TEST[]             = "subghz.test"; // connection self-test between radio1 and radio2
 
 // Oscilloscope / ADC
@@ -77,6 +83,7 @@ static const char CMD_BATTERY_INFO[]         = "battery.info";
 static const char CMD_STATUS_INFO[]          = "status.info"; // one-shot status snapshot
 static const char CMD_STATUS_REPORT_START[]  = "status.reporting.start";
 static const char CMD_STATUS_REPORT_STOP[]   = "status.reporting.stop";
+static const char CMD_DEVICE_STATUS[]        = "device.status"; // radio/device health check
 
 // Array of all command strings (useful for registration / validation)
 static const char* const SHARKOS_BT_COMMANDS[] = {
@@ -87,6 +94,8 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_WIFI_CHANNEL_SCAN,
     CMD_WIFI_SNIFFER_START,
     CMD_WIFI_SNIFFER_STOP,
+    CMD_WIFI_CAPTURE_START,
+    CMD_WIFI_CAPTURE_STOP,
     CMD_NRF_SCAN_START,
     CMD_NRF_SCAN_STOP,
     CMD_SUBGHZ_READ_START,
@@ -102,6 +111,8 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_SUBGHZ_PACKET_SEND,
     CMD_SUBGHZ_DISRUPTOR_START,
     CMD_SUBGHZ_DISRUPTOR_STOP,
+    CMD_SUBGHZ_SMART_DISRUPTOR_START,
+    CMD_SUBGHZ_SMART_DISRUPTOR_STOP,
     CMD_SUBGHZ_TEST,
     CMD_OSCILLOSCOPE_START,
     CMD_OSCILLOSCOPE_STOP,
@@ -123,7 +134,8 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_BATTERY_INFO,
     CMD_STATUS_INFO,
     CMD_STATUS_REPORT_START,
-    CMD_STATUS_REPORT_STOP
+    CMD_STATUS_REPORT_STOP,
+    CMD_DEVICE_STATUS
 };
 
 static const unsigned int SHARKOS_BT_COMMAND_COUNT = sizeof(SHARKOS_BT_COMMANDS) / sizeof(SHARKOS_BT_COMMANDS[0]);

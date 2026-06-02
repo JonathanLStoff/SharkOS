@@ -263,8 +263,10 @@ public:
 
 class LoRaTransceiver : public Transceiver {
 public:
-  SX1276 *dev;
-  LoRaTransceiver(SX1276 *d): dev(d) {}
+  LLCC68 *dev;
+  float topFreqMHz;
+  float botFreqMHz;
+  LoRaTransceiver(LLCC68 *d): dev(d), topFreqMHz(933.0f), botFreqMHz(900.0f) {}
   bool sendPacket(const std::vector<uint8_t> &payload, float freq_mhz, int32_t rssi = 0, const String &extra = "") override {
     events_enqueue_radio_bytes((int)LORA, payload.data(), payload.size(), freq_mhz, rssi);
     return true;
@@ -273,6 +275,51 @@ public:
   void startReceiveLoop() { receiving = true; }
   void stopReceiveLoop() { receiving = false; }
   void poll() { if (!receiving) return; loraRead(); }
+  void setTopFrequency(float freqMHz) { topFreqMHz = freqMHz; }
+  void setBotFrequency(float freqMHz) { botFreqMHz = freqMHz; }
+  void scan_range() {
+    float low  = botFreqMHz;
+    float high = topFreqMHz;
+    if (high < low) { float t = low; low = high; high = t; }
+    // LLCC68 operates 150-960 MHz; clamp
+    if (low  < 150.0f) low  = 150.0f;
+    if (high > 960.0f) high = 960.0f;
+    const float stepMHz = 0.5f;
+
+    extern bool scanningRadio;
+
+    // Initialize LLCC68 at the low end of the range
+    int16_t state = dev->setFrequency(low);
+    if (state != RADIOLIB_ERR_NONE) {
+      Serial.printf("[LoRa] setFrequency(%.1f) FAIL state=%d\n", low, state);
+      return;
+    }
+    // Put into receive so RSSI register populates
+    dev->startReceive();
+    delay(2);
+
+    for (float f = low; f <= high && scanningRadio; f += stepMHz) {
+      dev->setFrequency(f);
+      delayMicroseconds(800); // allow PLL to settle + RSSI to update
+      float rssiF = dev->getRSSI(false); // instantaneous RSSI (not packet RSSI)
+      int32_t rssi = (int32_t)rssiF;
+
+      uint32_t freq_khz = (uint32_t)(f * 1000.0f);
+      uint8_t sample[7];
+      sample[0] = 0xFF; // special modulation marker for LoRa
+      sample[1] = (uint8_t)(freq_khz & 0xFF);
+      sample[2] = (uint8_t)((freq_khz >> 8) & 0xFF);
+      sample[3] = (uint8_t)((freq_khz >> 16) & 0xFF);
+      sample[4] = (uint8_t)((freq_khz >> 24) & 0xFF);
+      sample[5] = (uint8_t)(rssi & 0xFF);
+      sample[6] = (uint8_t)LORA;
+
+      events_enqueue_radio_bytes((int)LORA, sample, sizeof(sample), f, rssi);
+      hw_send_radio_signal_protobuf((int)LORA, f, rssi, sample, sizeof(sample), "lora_scan");
+    }
+    // Return to standby after sweep
+    dev->standby();
+  }
 };
 
 class NRF24Transceiver : public Transceiver {

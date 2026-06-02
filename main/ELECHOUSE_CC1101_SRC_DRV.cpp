@@ -102,13 +102,19 @@ void ELECHOUSE_CC1101::SpiStart(void)
   pinMode(_SS_PIN, OUTPUT);
 
   // enable SPI
+  // NOTE: pass -1 for SS so the SPI peripheral does NOT attach _SS_PIN
+  // to its hardware CS output.  The hardware CS auto-asserts during every
+  // SPI transaction, which causes bus contention when the LLCC68 (LoRa)
+  // shares this SPI bus with a different CS pin.  We manage CS manually
+  // via digitalWrite(_SS_PIN, LOW/HIGH) in every SPI function instead.
   #ifdef ESP32
-  if (!_spiBus->begin(_SCK_PIN, _MISO_PIN, _MOSI_PIN, _SS_PIN)) {
+  if (!_spiBus->begin(_SCK_PIN, _MISO_PIN, _MOSI_PIN, -1)) {
     return;
   }
   #else
   _spiBus->begin();
   #endif
+  digitalWrite(_SS_PIN, HIGH);   // ensure CS is de-asserted after init
   _spi_initialized = true;
 }
 /****************************************************************

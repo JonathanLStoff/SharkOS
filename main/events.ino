@@ -76,8 +76,10 @@ void events_enqueue_radio_bytes(int module, const uint8_t* data, size_t len, flo
   radioLastReceivedMs[module] = millis();
 
   // For sub-ghz modules (CC1101_1/2, LORA) flush when we reach event-count threshold
+  // Use a lower threshold when smart disruptor is active so the chart updates frequently
+  int flushThresh = (disruptorActive == "smart") ? 4 : RADIO_SIGNAL_EVENT_COUNT;
   if (module == (int)CC1101_1 || module == (int)CC1101_2 || module == (int)LORA) {
-    if (radioBufferCount[module] >= RADIO_SIGNAL_EVENT_COUNT) {
+    if ((int)radioBufferCount[module] >= flushThresh) {
       events_flush_radio_buffer(module);
     }
   } else {
@@ -87,6 +89,31 @@ void events_enqueue_radio_bytes(int module, const uint8_t* data, size_t len, flo
     }
   }
 }
+
+// --- Disruptor runtime state (definitions) ---
+// `disruptorActive` values: "none", "yes", "smart"
+String disruptorActive = String("none");
+bool   disruptor_needs_init = true;
+
+// Regular disruptor saved config
+float disruptor_radio1_start_mhz = 0.0f;
+float disruptor_radio1_stop_mhz = 0.0f;
+String disruptor_radio1_power = String("LOW");
+float disruptor_radio2_start_mhz = 0.0f;
+float disruptor_radio2_stop_mhz = 0.0f;
+String disruptor_radio2_power = String("LOW");
+
+// Smart disruptor saved config
+int smart_disruptor_duration = 0;
+String smart_disruptor_unit = String("sec");
+int smart_disruptor_rssi_floor = -999;
+String smart_disruptor_radio1_power = String("LOW");
+String smart_disruptor_radio2_power = String("LOW");
+float smart_disruptor_start_mhz = 423.0f;
+float smart_disruptor_stop_mhz  = 443.0f;
+float smart_disruptor_best_freq = 0.0f; // 0 = no saved freq (first run)
+bool smart_disruptor_needs_init = false;
+
 
 static void events_check_radio_idle_flush() {
   unsigned long now = millis();
@@ -272,6 +299,7 @@ static String events_dequeue() {
 enum ActiveScanKind {
   SCAN_NONE = 0,
   SCAN_WIFI_SNIFFER,
+  SCAN_WIFI_CAPTURE,
   SCAN_BLE,
   SCAN_NRF,
   SCAN_SUBGHZ,
@@ -377,6 +405,12 @@ static void stop_active_scan_internal() {
   // clear scan-specific flags that older code may rely on
   if (activeScan == SCAN_SUBGHZ) scanningRadio = false;
   if (activeScan == SCAN_NFC_POLL) readingNfc = false;
+  if (activeScan == SCAN_WIFI_CAPTURE) {
+    // Disable promiscuous mode and re-init WiFi to normal state
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    Serial.println("[WiFiCapture] promiscuous mode disabled");
+  }
 
   activeScan = SCAN_NONE;
   activeScanFn = nullptr;
@@ -389,6 +423,24 @@ static void stop_active_scan_internal() {
     activeScanTask = NULL;
   }
 }
+
+// ── WiFi Capture (Wireshark) file-scope state ──
+struct WifiCapFrame {
+  unsigned long ts;
+  uint8_t src[6];
+  uint8_t dst[6];
+  uint8_t type;    // 0=mgmt, 1=data (swapped per 802.11), 2=ctrl
+  uint8_t subtype;
+  uint16_t len;
+  int8_t rssi;
+  uint8_t channel;
+};
+static const int WCAP_RING_SIZE = 32;
+static WifiCapFrame wifiCapRing[WCAP_RING_SIZE];
+static volatile int wifiCapHead = 0;
+static volatile int wifiCapTail = 0;
+static bool wifiCapHopping = true;
+static uint8_t wifiCapCurrentChannel = 1;
 
 // Helper used by dispatch_command_key to start/stop by command key
 static void start_scan_for_key(const String &key, const JsonObject *params = nullptr) {
@@ -406,10 +458,10 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
       }
       int n = WiFi.scanComplete();
       if (n > 0) {
-        DynamicJsonDocument out(1024);
-        JsonArray arr = out.createNestedArray("Networks");
+        JsonDocument out;
+        JsonArray arr = out["Networks"].to<JsonArray>();
         for (int i = 0; i < n && i < 12; ++i) {
-          JsonObject it = arr.createNestedObject();
+          JsonObject it = arr.add<JsonObject>();
           it["ssid"] = WiFi.SSID(i);
           it["rssi"] = WiFi.RSSI(i);
           it["bssid"] = WiFi.BSSIDstr(i);
@@ -430,6 +482,108 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
     return;
   }
 
+  // ── WiFi Capture (Wireshark-style promiscuous packet capture) ──
+  if (key == CMD_WIFI_CAPTURE_START) {
+    // Parse optional channel from params; default = channel-hop mode
+    wifiCapHopping = true;
+    wifiCapCurrentChannel = 1;
+    if (params && params->containsKey("channel")) {
+      int ch = (*params)["channel"].as<int>();
+      if (ch >= 1 && ch <= 13) {
+        wifiCapCurrentChannel = (uint8_t)ch;
+        wifiCapHopping = false;
+      }
+    }
+
+    // Set up promiscuous mode
+    WiFi.disconnect(true, true);
+    esp_wifi_stop();
+    delay(100);
+    esp_wifi_deinit();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&cfg);
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    esp_wifi_set_mode(WIFI_MODE_NULL);
+    esp_wifi_start();
+
+    esp_wifi_set_channel(wifiCapCurrentChannel, WIFI_SECOND_CHAN_NONE);
+
+    // Reset ring buffer
+    wifiCapHead = 0;
+    wifiCapTail = 0;
+
+    esp_wifi_set_promiscuous_rx_cb([](void *buf, wifi_promiscuous_pkt_type_t pktType) {
+      const wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
+      if (!pkt || pkt->rx_ctrl.sig_len < 24) return; // too short for 802.11 header
+
+      int nextHead = (wifiCapHead + 1) % WCAP_RING_SIZE;
+      if (nextHead == wifiCapTail) return; // ring full, drop
+
+      WifiCapFrame &f = wifiCapRing[wifiCapHead];
+      f.ts = millis();
+      const uint8_t *frame = pkt->payload;
+      // 802.11 header: FC(2) + Duration(2) + Addr1(6) + Addr2(6) + Addr3(6)
+      memcpy(f.dst, frame + 4, 6);   // Addr1 = DA/RA
+      memcpy(f.src, frame + 10, 6);  // Addr2 = SA/TA
+      uint8_t fc0 = frame[0];
+      f.type = (fc0 >> 2) & 0x03;    // type field
+      f.subtype = (fc0 >> 4) & 0x0F; // subtype field
+      f.len = pkt->rx_ctrl.sig_len;
+      f.rssi = pkt->rx_ctrl.rssi;
+      f.channel = pkt->rx_ctrl.channel;
+
+      wifiCapHead = nextHead;
+    });
+    esp_wifi_set_promiscuous(true);
+
+    start_active_scan_internal(SCAN_WIFI_CAPTURE, [](){
+      // Channel hop every iteration if in hop mode
+      if (wifiCapHopping) {
+        wifiCapCurrentChannel++;
+        if (wifiCapCurrentChannel > 13) wifiCapCurrentChannel = 1;
+        esp_wifi_set_channel(wifiCapCurrentChannel, WIFI_SECOND_CHAN_NONE);
+      }
+
+      // Drain ring buffer → JSON batch → BLE
+      int count = 0;
+      JsonDocument doc;
+      JsonArray frames = doc["wifi_capture"].to<JsonObject>()["frames"].to<JsonArray>();
+      while (wifiCapTail != wifiCapHead && count < 16) {
+        WifiCapFrame &f = wifiCapRing[wifiCapTail];
+        JsonObject fo = frames.add<JsonObject>();
+        fo["t"] = f.ts;
+        char srcMac[18], dstMac[18];
+        snprintf(srcMac, sizeof(srcMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 f.src[0], f.src[1], f.src[2], f.src[3], f.src[4], f.src[5]);
+        snprintf(dstMac, sizeof(dstMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 f.dst[0], f.dst[1], f.dst[2], f.dst[3], f.dst[4], f.dst[5]);
+        fo["src"] = srcMac;
+        fo["dst"] = dstMac;
+        // Map type to protocol string
+        const char *proto = "???";
+        switch (f.type) {
+          case 0: proto = "MGMT"; break;
+          case 1: proto = "CTRL"; break;
+          case 2: proto = "DATA"; break;
+        }
+        fo["proto"] = proto;
+        fo["sub"] = f.subtype;
+        fo["len"] = f.len;
+        fo["rssi"] = f.rssi;
+        fo["ch"] = f.channel;
+        wifiCapTail = (wifiCapTail + 1) % WCAP_RING_SIZE;
+        count++;
+      }
+      if (count > 0) {
+        String s;
+        serializeJson(doc, s);
+        notifyStatus(s.c_str());
+      }
+    }, 500, "wifi_capture");
+    bluetooth_send_response_internal("wifi.capture:started");
+    return;
+  }
+
   if (key == CMD_BLE_SCAN_START) {
     set_scan_modulation_single("BLE");
     // BLE scanning runs from the main loop scan_loop_tick(), NOT an RTOS task.
@@ -444,10 +598,10 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
         return;
       }
       if (millis() >= reportAt) {
-        DynamicJsonDocument out(1024);
-        JsonArray arr = out.createNestedArray("Devices");
+        JsonDocument out;
+        JsonArray arr = out["Devices"].to<JsonArray>();
         for (size_t i = 0; i < blescanner_devices.size() && i < 20; ++i) {
-          JsonObject d = arr.createNestedObject();
+          JsonObject d = arr.add<JsonObject>();
           d["name"] = blescanner_devices[i].name;
           d["addr"] = blescanner_devices[i].address;
           d["rssi"] = blescanner_devices[i].rssi;
@@ -532,22 +686,182 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
       botMHz = t;
     }
 
-    if (cc1101Tx) {
-      cc1101Tx->setTopFrequency(topMHz);
-      cc1101Tx->setBotFrequency(botMHz);
-      cc1101Tx->setModulation(mod1);
-    }
-    if (cc1101Tx2) {
-      cc1101Tx2->setTopFrequency(topMHz);
-      cc1101Tx2->setBotFrequency(botMHz);
-      cc1101Tx2->setModulation(mod2);
-    }
-    set_scan_modulation_pair(mod1, mod2);
+    // Detect if LoRa modulation is requested
+    bool isLoRa = (mod1.equalsIgnoreCase("LoRa") || mod2.equalsIgnoreCase("LoRa"));
 
-    // use existing cc1101Read() which is non-blocking and reports via notifyStatus
-    start_active_scan_internal(SCAN_SUBGHZ, [](){ cc1101Read(); }, 2000, "subghz_read");
+    if (isLoRa) {
+      // LoRa mode: only scan with the LLCC68 module, disable CC1101
+      if (loraTx) {
+        loraTx->setTopFrequency(topMHz);
+        loraTx->setBotFrequency(botMHz);
+      }
+      // Idle CC1101 radios so they don't interfere with shared SPI
+      cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+      cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+      digitalWrite(CC1101_2_CS, HIGH);  // ensure CC1101 #2 CS is de-asserted
+      delay(10); // allow SPI bus to settle before LoRa init
+      set_scan_modulation_pair("LoRa", "LoRa");
+
+      // Initialize the LLCC68 at the center of the range
+      float centerFreq = (topMHz + botMHz) / 2.0f;
+      int16_t loraState = lora.begin(centerFreq);
+      if (loraState != RADIOLIB_ERR_NONE) {
+        Serial.printf("[SubGHz] LoRa begin(%.1f) FAIL state=%d\n", centerFreq, loraState);
+        bluetooth_send_response_internal("subghz.read:lora_init_fail");
+        return;
+      }
+      Serial.printf("[SubGHz] LoRa scan mode: %.1f-%.1f MHz\n", botMHz, topMHz);
+
+      start_active_scan_internal(SCAN_SUBGHZ, [](){ loraRead(); }, 2000, "subghz_lora_read");
+    } else {
+      // CC1101 mode: scan with both radios
+      if (cc1101Tx) {
+        cc1101Tx->setTopFrequency(topMHz);
+        cc1101Tx->setBotFrequency(botMHz);
+        cc1101Tx->setModulation(mod1);
+      }
+      if (cc1101Tx2) {
+        cc1101Tx2->setTopFrequency(topMHz);
+        cc1101Tx2->setBotFrequency(botMHz);
+        cc1101Tx2->setModulation(mod2);
+      }
+      set_scan_modulation_pair(mod1, mod2);
+
+      // use existing cc1101Read() which is non-blocking and reports via notifyStatus
+      start_active_scan_internal(SCAN_SUBGHZ, [](){ cc1101Read(); }, 2000, "subghz_read");
+    }
     scanningRadio = true; // keep compatibility with older handlers
     bluetooth_send_response_internal("subghz.read:started");
+    return;
+  }
+
+  // ── Sub-GHz Packet Sniffer (subghz.record.start) ──
+  // Parks on frequencies and captures raw packet data above RSSI threshold.
+  // Params: { top_frequency_mhz, bottom_frequency_mhz, modulation, rssi_threshold }
+  if (key == CMD_SUBGHZ_RECORD_START) {
+    extern float sniffer_top_mhz, sniffer_bot_mhz;
+    extern int   sniffer_rssi_threshold;
+    extern String sniffer_modulation;
+    extern bool   sniffer_use_lora;
+
+    float topMHz = 433.0f, botMHz = 400.0f;
+    String mod = "OOK";
+    int rssiThresh = -80;
+
+    if (params) {
+      if (params->containsKey("top_frequency_mhz"))
+        topMHz = (*params)["top_frequency_mhz"].as<float>();
+      if (params->containsKey("bottom_frequency_mhz"))
+        botMHz = (*params)["bottom_frequency_mhz"].as<float>();
+      if (params->containsKey("frequency_mhz") && topMHz <= 0.0f)
+        topMHz = (*params)["frequency_mhz"].as<float>();
+      if (params->containsKey("modulation"))
+        mod = (*params)["modulation"].as<String>();
+      if (params->containsKey("modulation_one"))
+        mod = (*params)["modulation_one"].as<String>();
+      if (params->containsKey("rssi_threshold"))
+        rssiThresh = (*params)["rssi_threshold"].as<int>();
+    }
+    if (topMHz <= 0.0f) topMHz = 433.0f;
+    if (botMHz <= 0.0f) botMHz = 400.0f;
+    if (topMHz < botMHz) { float t = topMHz; topMHz = botMHz; botMHz = t; }
+
+    sniffer_top_mhz = topMHz;
+    sniffer_bot_mhz = botMHz;
+    sniffer_rssi_threshold = rssiThresh;
+    sniffer_modulation = mod;
+    sniffer_use_lora = mod.equalsIgnoreCase("LoRa");
+
+    Serial.printf("[Sniffer] Starting: %.1f-%.1f MHz mod=%s rssi>=%d lora=%s\n",
+                  botMHz, topMHz, mod.c_str(), rssiThresh, sniffer_use_lora ? "yes" : "no");
+
+    if (sniffer_use_lora) {
+      // Idle CC1101 radios
+      cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+      cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+      digitalWrite(CC1101_2_CS, HIGH);  // ensure CC1101 #2 CS is de-asserted
+      delay(10);
+      int16_t loraState = lora.begin((topMHz + botMHz) / 2.0f);
+      if (loraState != RADIOLIB_ERR_NONE) {
+        Serial.printf("[Sniffer] LoRa begin FAIL state=%d\n", loraState);
+        bluetooth_send_response_internal("subghz.record:lora_init_fail");
+        return;
+      }
+      start_active_scan_internal(SCAN_SUBGHZ, [](){ loraSnifferRead(); }, 3000, "subghz_sniffer_lora");
+    } else {
+      start_active_scan_internal(SCAN_SUBGHZ, [](){ cc1101SnifferRead(); }, 3000, "subghz_sniffer");
+    }
+    scanningRadio = true;
+    bluetooth_send_response_internal("subghz.record:started");
+    return;
+  }
+
+  // ── Sub-GHz Packet Send (subghz.packet.send) ──
+  // Transmits a raw packet on a given frequency/modulation
+  // Params: { frequency_mhz, modulation, data (hex string) }
+  if (key == CMD_SUBGHZ_PACKET_SEND) {
+    float txFreq = 433.0f;
+    String txMod = "OOK";
+    String txDataHex = "";
+
+    if (params) {
+      if (params->containsKey("frequency_mhz"))
+        txFreq = (*params)["frequency_mhz"].as<float>();
+      else if (params->containsKey("frequency_khz"))
+        txFreq = (*params)["frequency_khz"].as<float>() / 1000.0f;
+      if (params->containsKey("modulation"))
+        txMod = (*params)["modulation"].as<String>();
+      if (params->containsKey("data"))
+        txDataHex = (*params)["data"].as<String>();
+    }
+
+    bool useLora = txMod.equalsIgnoreCase("LoRa");
+    int dataLen = txDataHex.length() / 2;
+    uint8_t txBuf[128];
+    if (dataLen > 128) dataLen = 128;
+
+    // Parse hex string to bytes
+    for (int i = 0; i < dataLen; i++) {
+      char h[3] = { txDataHex.charAt(i*2), txDataHex.charAt(i*2+1), 0 };
+      txBuf[i] = (uint8_t)strtol(h, NULL, 16);
+    }
+
+    Serial.printf("[PacketSend] freq=%.3f mod=%s len=%d\n", txFreq, txMod.c_str(), dataLen);
+
+    if (useLora) {
+      cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+      cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+      digitalWrite(CC1101_2_CS, HIGH);  // ensure CC1101 #2 CS is de-asserted
+      delay(10);
+      int16_t st = lora.begin(txFreq);
+      if (st == RADIOLIB_ERR_NONE) {
+        int16_t txSt = lora.transmit(txBuf, dataLen);
+        lora.standby();
+        Serial.printf("[PacketSend] LoRa transmit state=%d\n", txSt);
+        bluetooth_send_response_internal(txSt == RADIOLIB_ERR_NONE ? "subghz.packet.send:ok" : "subghz.packet.send:tx_fail");
+      } else {
+        Serial.printf("[PacketSend] LoRa begin FAIL state=%d\n", st);
+        bluetooth_send_response_internal("subghz.packet.send:lora_init_fail");
+      }
+    } else {
+      // CC1101 TX
+      cc1101_driver_1.setCCMode(true);
+      cc1101_driver_1.setGDO0(CC1101_1_GDO0);
+      if (txMod == "2-FSK" || txMod == "FSK") cc1101_driver_1.setModulation(0);
+      else if (txMod == "GFSK") cc1101_driver_1.setModulation(1);
+      else cc1101_driver_1.setModulation(2); // OOK/ASK
+      cc1101_driver_1.setMHZ(txFreq);
+      cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+      cc1101_driver_1.SpiStrobe(CC1101_SFTX);
+      // Write length + data to TX FIFO
+      cc1101_driver_1.SpiWriteReg(CC1101_TXFIFO, (uint8_t)dataLen);
+      cc1101_driver_1.SpiWriteBurstReg(CC1101_TXFIFO, txBuf, dataLen);
+      cc1101_driver_1.SpiStrobe(CC1101_STX);
+      delay(50); // Wait for TX
+      cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+      Serial.println("[PacketSend] CC1101 TX complete");
+      bluetooth_send_response_internal("subghz.packet.send:ok");
+    }
     return;
   }
 
@@ -562,7 +876,7 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
       delayMicroseconds(100);
       bool r1 = radio1.testRPD();
       // radio2 disabled (single nRF24 module)
-      DynamicJsonDocument out(256);
+      JsonDocument out;
       out["channel"] = ch;
       out["r1"] = r1;
       out["r2"] = false;
@@ -580,7 +894,7 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
       // after boot but we guard with a try to avoid crashes if pin is
       // misconfigured.
       int raw = analogRead(ANALOG_PIN);
-      DynamicJsonDocument out(128);
+      JsonDocument out;
       out["analog"] = raw;
       String s; serializeJson(out, s);
       notifyStatus(s.c_str());
@@ -605,7 +919,7 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
       // reuse NFC read logic from handleOngoingTasks but non-blocking
       uint8_t uid[7]; uint8_t uidLength;
       if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
-        DynamicJsonDocument doc(256);
+        JsonDocument doc;
         String uidStr = "";
         for (uint8_t i = 0; i < uidLength; i++) {
           if (uid[i] < 0x10) uidStr += "0";
@@ -623,7 +937,7 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
   if (key == CMD_SENSOR_STREAM_START) {
     // placeholder sensor stream: send small sample periodically
     start_active_scan_internal(SCAN_SENSOR_STREAM, [](){
-      DynamicJsonDocument doc(128);
+      JsonDocument doc;
       doc["sensor"]["accel.x"] = random(-10, 10);
       doc["sensor"]["accel.y"] = random(-10, 10);
       doc["sensor"]["accel.z"] = random(-10, 10);
@@ -660,8 +974,10 @@ static void stop_scan_for_key(const String &key) {
 
   bool matches = false;
   if ((key == CMD_WIFI_SNIFFER_STOP) && activeScan == SCAN_WIFI_SNIFFER) matches = true;
+  if ((key == CMD_WIFI_CAPTURE_STOP) && activeScan == SCAN_WIFI_CAPTURE) matches = true;
   if ((key == CMD_BLE_SCAN_STOP) && activeScan == SCAN_BLE) matches = true;
   if ((key == CMD_SUBGHZ_READ_STOP) && activeScan == SCAN_SUBGHZ) matches = true;
+  if ((key == CMD_SUBGHZ_RECORD_STOP) && activeScan == SCAN_SUBGHZ) matches = true;
   if ((key == CMD_NRF_SCAN_STOP) && activeScan == SCAN_NRF) matches = true;
   if ((key == CMD_OSCILLOSCOPE_STOP) && activeScan == SCAN_OSCILLOSCOPE) matches = true;
   if ((key == CMD_I2C_SCAN_STOP) && activeScan == SCAN_I2C) matches = true;
@@ -683,7 +999,7 @@ static void stop_scan_for_key(const String &key) {
 bool events_validate_topic(const String &payload) {
   // Accept either existing BleMessage JSON (contains "Command") or
   // a simple JSON/payload with a `command` field that matches commands.h.
-  DynamicJsonDocument doc(1024);
+  JsonDocument doc;
   auto err = deserializeJson(doc, payload);
   if (!err) {
     if (doc.containsKey("Command")) return true; // legacy firmware command
@@ -717,7 +1033,7 @@ static void bluetooth_send_response_internal(const String &payload, const String
     return;
   }
 
-  DynamicJsonDocument out(512);
+  JsonDocument out;
   out["Response"] = payload;
   out["inReplyTo"] = inReplyTo;
   String outStr;
@@ -736,7 +1052,7 @@ void bluetooth_send_response(const String &payload, const String &inReplyTo) {
 void handleBLECommand(const String &jsonCmd) {
   Serial.print("Handling BLE command (legacy JSON): "); Serial.println(jsonCmd);
 
-  DynamicJsonDocument doc(1024);
+  JsonDocument doc;
   auto err = deserializeJson(doc, jsonCmd);
   if (err) {
     Serial.print("JSON parse error: "); Serial.println(err.c_str());
@@ -870,6 +1186,8 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
     if (key == CMD_WIFI_SCAN_STOP)     { bluetooth_send_response_internal("wifi.scan:stopped"); return; }
   if (key == CMD_WIFI_SNIFFER_START) { start_scan_for_key(String(CMD_WIFI_SNIFFER_START), params); return; }
   if (key == CMD_WIFI_SNIFFER_STOP)  { stop_scan_for_key(String(CMD_WIFI_SNIFFER_STOP)); return; }
+  if (key == CMD_WIFI_CAPTURE_START) { start_scan_for_key(String(CMD_WIFI_CAPTURE_START), params); return; }
+  if (key == CMD_WIFI_CAPTURE_STOP)  { stop_scan_for_key(String(CMD_WIFI_CAPTURE_STOP)); return; }
 
   // nRF (2.4GHz)
   if (key == CMD_NRF_SCAN_START) { start_scan_for_key(String(CMD_NRF_SCAN_START), params); return; }
@@ -940,6 +1258,187 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
   if (key == CMD_SUBGHZ_READ_START) { start_scan_for_key(String(CMD_SUBGHZ_READ_START), params); return; }
   if (key == CMD_SUBGHZ_READ_STOP)  { stop_scan_for_key(String(CMD_SUBGHZ_READ_STOP)); return; }
 
+  // Sub-GHz packet sniffer (record)
+  if (key == CMD_SUBGHZ_RECORD_START) { start_scan_for_key(String(CMD_SUBGHZ_RECORD_START), params); return; }
+  if (key == CMD_SUBGHZ_RECORD_STOP)  { stop_scan_for_key(String(CMD_SUBGHZ_RECORD_STOP)); return; }
+
+  // Sub-GHz disruptor: save configuration but do not immediately start hardware
+  if (key == CMD_SUBGHZ_DISRUPTOR_START) {
+    // params: { radio1: { start_freq|freq, stop_freq, mod, power }, radio2: {...} }
+    bool r1ok = false, r2ok = false;
+    if (params && params->containsKey("radio1") && !(*params)["radio1"].isNull()) {
+      JsonObject r1 = (*params)["radio1"].as<JsonObject>();
+      float startf = 433.0f;
+      if (r1.containsKey("start_freq")) startf = r1["start_freq"].as<float>();
+      else if (r1.containsKey("frequency")) startf = r1["frequency"].as<float>();
+      else if (r1.containsKey("freq")) startf = r1["freq"].as<float>();
+      float stopf = startf;
+      if (r1.containsKey("stop_freq")) stopf = r1["stop_freq"].as<float>();
+
+      // power: accept numeric mapping 0/1/2 or string
+      String pstr = String("LOW");
+      if (r1.containsKey("power")) {
+        int pi = -999;
+        // try numeric
+        pi = r1["power"] | -999;
+        if (pi == -999) {
+          const char *ps = r1["power"];
+          if (ps) pstr = String(ps);
+        } else {
+          if (pi <= 0) pstr = String("LOW");
+          else if (pi == 1) pstr = String("MID");
+          else pstr = String("MAX");
+        }
+      }
+
+      disruptor_radio1_start_mhz = startf;
+      disruptor_radio1_stop_mhz = stopf;
+      disruptor_radio1_power = pstr;
+      Serial.printf("[Disruptor] Saved Radio1 start=%.3f stop=%.3f power=%s\n", startf, stopf, pstr.c_str());
+      r1ok = true;
+    }
+    if (params && params->containsKey("radio2") && !(*params)["radio2"].isNull()) {
+      JsonObject r2 = (*params)["radio2"].as<JsonObject>();
+      float startf = 400.0f;
+      if (r2.containsKey("start_freq")) startf = r2["start_freq"].as<float>();
+      else if (r2.containsKey("frequency")) startf = r2["frequency"].as<float>();
+      else if (r2.containsKey("freq")) startf = r2["freq"].as<float>();
+      float stopf = startf;
+      if (r2.containsKey("stop_freq")) stopf = r2["stop_freq"].as<float>();
+
+      String pstr = String("LOW");
+      if (r2.containsKey("power")) {
+        int pi = -999;
+        pi = r2["power"] | -999;
+        if (pi == -999) {
+          const char *ps = r2["power"];
+          if (ps) pstr = String(ps);
+        } else {
+          if (pi <= 0) pstr = String("LOW");
+          else if (pi == 1) pstr = String("MID");
+          else pstr = String("MAX");
+        }
+      }
+
+      disruptor_radio2_start_mhz = startf;
+      disruptor_radio2_stop_mhz = stopf;
+      disruptor_radio2_power = pstr;
+      Serial.printf("[Disruptor] Saved Radio2 start=%.3f stop=%.3f power=%s\n", startf, stopf, pstr.c_str());
+      r2ok = true;
+    }
+
+    // mark disruptor active string-wise
+    if (r1ok || r2ok) {
+      disruptorActive = String("yes");
+      disruptor_needs_init = true;
+    } else {
+      disruptorActive = String("none");
+    }
+
+    // Send status response back to app
+    String resp = "{\"disruptor_status\":{\"radio1\":";
+    resp += r1ok ? "true" : "false";
+    resp += ",\"radio2\":";
+    resp += r2ok ? "true" : "false";
+    resp += "}}";
+    bluetooth_send_response_internal(resp.c_str());
+    return;
+  }
+  if (key == CMD_SUBGHZ_DISRUPTOR_STOP) {
+    // Stop both radios (clear active state)
+    Serial.println("[Disruptor] Stop command received");
+    // clear disruptor flag
+    disruptorActive = String("none");
+    disruptor_needs_init = true;
+    // optionally clear saved configuration
+    disruptor_radio1_start_mhz = disruptor_radio1_stop_mhz = 0.0f;
+    disruptor_radio2_start_mhz = disruptor_radio2_stop_mhz = 0.0f;
+    disruptor_radio1_power = disruptor_radio2_power = String("LOW");
+    // Idle both CC1101 radios
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+    String resp = "{\"disruptor_status\":{\"radio1\":false,\"radio2\":false}}";
+    bluetooth_send_response_internal(resp.c_str());
+    return;
+  }
+
+  // Smart disruptor: save listen/disrupt settings and mark active as "smart"
+  if (key == CMD_SUBGHZ_SMART_DISRUPTOR_START) {
+    int duration = params ? ((*params)["duration"] | 10) : 10;
+    String unit = params ? (String((const char*)((*params)["unit"] | "sec"))) : String("sec");
+    int rssiFloor = params ? ((*params)["rssi_floor"] | -50) : -50;
+
+    // freq range (defaults 423-443 MHz)
+    float startMhz = 423.0f;
+    float stopMhz  = 443.0f;
+    if (params && params->containsKey("start_freq")) {
+      float v = (*params)["start_freq"].as<float>();
+      if (v > 0.0f) startMhz = v;
+    }
+    if (params && params->containsKey("stop_freq")) {
+      float v = (*params)["stop_freq"].as<float>();
+      if (v > 0.0f) stopMhz = v;
+    }
+    if (stopMhz < startMhz) { float t = startMhz; startMhz = stopMhz; stopMhz = t; }
+
+    // radio power — Radio 1 only (Radio 2 mirrors Radio 1)
+    String p1str = String("LOW");
+    if (params && params->containsKey("radio1") && !(*params)["radio1"].isNull()) {
+      JsonObject r1 = (*params)["radio1"].as<JsonObject>();
+      int pi = r1["power"] | -999;
+      if (pi == -999) {
+        const char *ps = r1["power"];
+        if (ps) p1str = String(ps);
+      } else {
+        if (pi <= 0) p1str = String("LOW"); else if (pi == 1) p1str = String("MID"); else p1str = String("MAX");
+      }
+    }
+    String p2str = p1str; // Radio 2 mirrors Radio 1 power
+
+    // save
+    smart_disruptor_duration = duration;
+    smart_disruptor_unit = unit;
+    smart_disruptor_rssi_floor = rssiFloor;
+    smart_disruptor_radio1_power = p1str;
+    smart_disruptor_radio2_power = p2str;
+    smart_disruptor_start_mhz = startMhz;
+    smart_disruptor_stop_mhz  = stopMhz;
+
+    // Load previously saved best freq from NVS (0 = first run)
+    smart_disruptor_best_freq = prefs.getFloat("sd_best_freq", 0.0f);
+    Serial.printf("[SmartDisruptor] Saved duration=%d %s rssi_floor=%d range=%.1f-%.1f p1=%s p2=%s best_freq=%.1f\n",
+                  duration, unit.c_str(), rssiFloor, startMhz, stopMhz, p1str.c_str(), p2str.c_str(), smart_disruptor_best_freq);
+
+    disruptorActive = String("smart");
+    smart_disruptor_needs_init = true;
+
+    bool firstRun = (smart_disruptor_best_freq <= 0.0f);
+    String resp = "{\"smart_disruptor_status\":{\"active\":true,\"first_run\":";
+    resp += firstRun ? "true" : "false";
+    resp += ",\"saved_freq\":";
+    resp += String(smart_disruptor_best_freq, 1);
+    resp += "}}";
+    bluetooth_send_response_internal(resp.c_str());
+    return;
+  }
+  if (key == CMD_SUBGHZ_SMART_DISRUPTOR_STOP) {
+    Serial.println("[SmartDisruptor] Stop command received");
+    disruptorActive = String("none");
+    smart_disruptor_needs_init = false;
+    smart_disruptor_duration = 0;
+    smart_disruptor_unit = String("sec");
+    smart_disruptor_rssi_floor = -999;
+    smart_disruptor_start_mhz = 423.0f;
+    smart_disruptor_stop_mhz  = 443.0f;
+    smart_disruptor_best_freq = 0.0f;
+    // NOTE: we do NOT clear the NVS key here so the saved freq persists
+    // across stop/start cycles. Only a full reset clears it.
+    smart_disruptor_radio1_power = smart_disruptor_radio2_power = String("LOW");
+    String resp = "{\"smart_disruptor_status\":{\"active\":false}}";
+    bluetooth_send_response_internal(resp.c_str());
+    return;
+  }
+
   // Oscilloscope / ADC
   if (key == CMD_OSCILLOSCOPE_START) { start_scan_for_key(String(CMD_OSCILLOSCOPE_START), params); return; }
   if (key == CMD_OSCILLOSCOPE_STOP)  { stop_scan_for_key(String(CMD_OSCILLOSCOPE_STOP)); return; }
@@ -980,8 +1479,14 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
 
   // Convenience / control
   if (key == CMD_LIST_PAIRED_DEVICES) { bluetooth_send_response_internal("list.paired.devices:[]"); return; }
-  if (key == CMD_BATTERY_INFO) { DynamicJsonDocument jb(128); jb["battery"] = batteryPercent; String s; serializeJson(jb,s); bluetooth_send_response_internal(s); return; }
+  if (key == CMD_BATTERY_INFO) { JsonDocument jb; jb["battery"] = batteryPercent; String s; serializeJson(jb,s); bluetooth_send_response_internal(s); return; }
   if (key == CMD_STATUS_INFO) { send_status_snapshot_protobuf(); bluetooth_send_response_internal("status.info:ok"); return; }
+  if (key == CMD_DEVICE_STATUS) {
+    String statusJson = getRadioStatusJson();
+    Serial.printf("[DeviceStatus] %s\n", statusJson.c_str());
+    bluetooth_send_response_internal(statusJson);
+    return;
+  }
   if (key == CMD_STATUS_REPORT_START) { start_scan_for_key(String(CMD_STATUS_REPORT_START), params); return; }
   if (key == CMD_STATUS_REPORT_STOP)  { stop_scan_for_key(String(CMD_STATUS_REPORT_STOP)); return; }
 
@@ -996,23 +1501,26 @@ void events_process_one() {
   // scan_loop_tick runs the scan lambda from main-loop context (thread-safe)
   scan_loop_tick();
 
+  // Disruptor tasks run independently of scanningRadio
+  if (disruptorActive == "yes") {
+    cc1101Disrupt(disruptor_radio1_start_mhz, disruptor_radio1_stop_mhz, powerStringToDbm(disruptor_radio1_power),
+                 disruptor_radio2_start_mhz, disruptor_radio2_stop_mhz, powerStringToDbm(disruptor_radio2_power));
+  } else if (disruptorActive == "smart") {
+    cc1101SmartDisrupt(powerStringToDbm(smart_disruptor_radio1_power),
+                       (float)smart_disruptor_rssi_floor,
+                       (float)smart_disruptor_duration);
+  }
   // Poll transceivers to perform non-blocking reads and enqueue packets
   // only if specifically requested via scanningRadio flag (legacy behavior)
-  // or if we decide to poll all the time (but user wants it gated).
-  if (scanningRadio) {
+  else if (scanningRadio) {
     Serial.print("DEBUG: scanningRadio=true, modulation="); Serial.println(scan_modulation_joined());
     if (scan_modulation_contains("WIFI")) {
-       // WiFi scanning requested - run from main loop (safe context)
-       // Serial.println("DEBUG: runWifiBleScanTasks");
        runWifiBleScanTasks();
     } else if (scan_modulation_contains("BLE")) {
         // BLE scanning requested - run from main loop (safe context)
     } else {
       // Sub-GHz/LoRa/NRF polling requested
-      // Only poll if no RTOS scan task is running (avoid concurrent SPI access)
-      
       runTransceiverPollTasks();
-      
     }
   }
 
@@ -1034,7 +1542,7 @@ void events_process_one() {
   }
 
   // Prefer JSON 'Command' format — forward to existing handler
-  DynamicJsonDocument doc(1024);
+  JsonDocument doc;
   auto err = deserializeJson(doc, raw);
   if (!err) {
     // extract optional correlation id so replies can be correlated
@@ -1109,11 +1617,11 @@ void events_process_one() {
         JsonObject params = doc.containsKey("params") ? doc["params"].as<JsonObject>() : JsonObject();
         // Allow start/stop control for background scans here
         String k = String(key);
-        if (k == String(CMD_WIFI_SNIFFER_START) || k == String(CMD_BLE_SCAN_START) || k == String(CMD_NRF_SCAN_START) || k == String(CMD_SUBGHZ_READ_START) || k == String(CMD_OSCILLOSCOPE_START) || k == String(CMD_I2C_SCAN_START) || k == String(CMD_NFC_POLL_START) || k == String(CMD_SENSOR_STREAM_START)) {
+        if (k == String(CMD_WIFI_SNIFFER_START) || k == String(CMD_WIFI_CAPTURE_START) || k == String(CMD_BLE_SCAN_START) || k == String(CMD_NRF_SCAN_START) || k == String(CMD_SUBGHZ_READ_START) || k == String(CMD_OSCILLOSCOPE_START) || k == String(CMD_I2C_SCAN_START) || k == String(CMD_NFC_POLL_START) || k == String(CMD_SENSOR_STREAM_START)) {
           start_scan_for_key(k, &params);
           return;
         }
-        if (k == String(CMD_WIFI_SNIFFER_STOP) || k == String(CMD_BLE_SCAN_STOP) || k == String(CMD_NRF_SCAN_STOP) || k == String(CMD_SUBGHZ_READ_STOP) || k == String(CMD_OSCILLOSCOPE_STOP) || k == String(CMD_I2C_SCAN_STOP) || k == String(CMD_NFC_POLL_STOP) || k == String(CMD_SENSOR_STREAM_STOP)) {
+        if (k == String(CMD_WIFI_SNIFFER_STOP) || k == String(CMD_WIFI_CAPTURE_STOP) || k == String(CMD_BLE_SCAN_STOP) || k == String(CMD_NRF_SCAN_STOP) || k == String(CMD_SUBGHZ_READ_STOP) || k == String(CMD_OSCILLOSCOPE_STOP) || k == String(CMD_I2C_SCAN_STOP) || k == String(CMD_NFC_POLL_STOP) || k == String(CMD_SENSOR_STREAM_STOP)) {
           stop_scan_for_key(k);
           return;
         }

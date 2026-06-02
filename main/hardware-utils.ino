@@ -557,8 +557,9 @@ bool wifi_showInfo = false;
 // Pins (moved to globals.h)
 // I2C / IR / PN532 pin macros are defined in globals.h
 
-TwoWire myWire(0);
-Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET, &myWire);
+// PN532 NFC — connected via SPI (FSPI), CS = PN532SS_PIN (GPIO 10)
+// Shares FSPI bus with CC1101 #1 and nRF24.
+Adafruit_PN532 nfc(PN532SS_PIN, &SPI);
 
 // Peripheral pin macros moved to globals.h (so all modules include them)
 // nRF24 / SD / RF24 / CC1101 / LoRa pin macros are defined in globals.h now.
@@ -577,9 +578,10 @@ ELECHOUSE_CC1101 cc1101_driver_1;
 SPIClass         cc1101_spi2(HSPI);   // SPI3 peripheral for CC1101 #2
 ELECHOUSE_CC1101 cc1101_driver_2;
 
-// LoRa module — shares global SPI (FSPI) with nRF24, different CS pin (LORA_NSS)
-Module lora_module(LORA_NSS, LORA_DIO0, LORA_RESET, LORA_DIO1, SPI);
-SX1276 lora(&lora_module);
+// LoRa module (LLCC68) — shares HSPI (SPI3) with CC1101 #2 (SCK=5 MISO=4 MOSI=6), different CS pin
+// LLCC68/SX126x Module args: CS, IRQ(DIO1), RST, BUSY, SPIClass
+Module lora_module(LORA_NSS, LORA_DIO1, LORA_RESET, LORA_BUSY, cc1101_spi2);
+LLCC68 lora(&lora_module);
 
 
 
@@ -661,28 +663,14 @@ void deviceSetup() {
   pinMode(CE1_PIN, OUTPUT);
   pinMode(CC1101_1_CS, OUTPUT);
   pinMode(LORA_NSS, OUTPUT);
+  pinMode(PN532SS_PIN, OUTPUT);
+  digitalWrite(PN532SS_PIN, HIGH);  // deassert NFC CS at boot
 
   delay(10); // yield to WDT
 
   IrReceiver.begin(irrecivepin);
   IrSender.begin(irsenderpin);
 
-  // I2C for PN532 NFC
-  myWire.begin(I2C_SDA, I2C_SCL);
-  delay(10); // yield to WDT
-
-  // NFC init — guarded. If PN532 is not connected, begin()/SAMConfig()
-  // can block for several seconds on I2C, contributing to WDT timeout.
-  Serial.println("deviceSetup: NFC init (guarded)");
-  nfc.begin();  // sets up I2C transport (fast, just NACKs if absent)
-  delay(10); // yield to WDT
-  uint32_t nfcVersion = nfc.getFirmwareVersion();
-  if (nfcVersion) {
-    Serial.print("PN532 found, FW: "); Serial.println(nfcVersion, HEX);
-    nfc.SAMConfig();
-  } else {
-    Serial.println("PN532 not found — skipping NFC init");
-  }
   delay(10); // yield to WDT
 
   // DO NOT pre-initialize SPI here. The CC1101 library uses the global
@@ -706,6 +694,30 @@ void deviceSetup() {
   Serial.println("CC1101 #1 init OK");
   delay(10); // yield to WDT
 
+  // NFC init — PN532 is on FSPI (SPI2), CS = PN532SS_PIN (GPIO 10).
+  // Must happen AFTER CC1101 #1 Init() which sets up FSPI with correct pins.
+  // Idle CC1101 #1 so it doesn't contend on the shared FSPI bus.
+  deactivateNRF1();          // nRF24 shares CS pin 10
+  deactivateCC1101();        // idle CC1101 #1 on same bus
+  delay(10); // yield to WDT
+
+  Serial.println("deviceSetup: NFC init (SPI, guarded)");
+  nfc.begin();  // initialises SPI transport to PN532
+  // nfc.begin() calls SPI.begin() without pin args, which resets FSPI to
+  // default ESP32-S3 pins (36/37/35). Restore the correct FSPI pins so
+  // CC1101 #1 (and subsequent FSPI users) still work.
+  SPI.end();
+  SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, -1);
+  delay(10); // yield to WDT
+  uint32_t nfcVersion = nfc.getFirmwareVersion();
+  if (nfcVersion) {
+    Serial.print("PN532 found, FW: "); Serial.println(nfcVersion, HEX);
+    nfc.SAMConfig();
+  } else {
+    Serial.println("PN532 not found — skipping NFC init");
+  }
+  delay(10); // yield to WDT
+
   // Init CC1101 #2 — uses its own HSPI (SPI3) bus so it cannot conflict with driver_1's FSPI
   Serial.println("deviceSetup: initializing CC1101 #2");
   cc1101_driver_2.setSPIBus(&cc1101_spi2);  // assign SPI3 before Init()
@@ -717,15 +729,13 @@ void deviceSetup() {
   cc1101_driver_2.setMHZ(433.92);
   Serial.println("CC1101 #2 init OK");
 
-  // Init LoRa (disabled by default for S3 dev boards because the
-  // LORA SPI pins overlap the board's flash/PSRAM lines; leave as a
-  // no-op here to avoid corrupting flash/PSRAM.)
-  Serial.println("deviceSetup: LoRa init skipped (pins overlap PSRAM/flash)");
-  // state = lora.begin(915.0);
-  // if (state != RADIOLIB_ERR_NONE) {
-  //   Serial.print("LoRa init failed: ");
-  //   Serial.println(state);
-  // }
+  // LoRa init — deferred to first use (lora.begin() is called by the scan
+  // handler in events.ino or the radio test in subghz_control.ino).
+  // The LLCC68 shares HSPI with CC1101 #2; CC1101 #2 must be idled before
+  // any LoRa SPI traffic.
+  // Configure RF switch control pins (RXEN/TXEN) — persists in Module, no SPI needed
+  lora.setRfSwitchPins(L_RXEN, L_TXEN);
+  Serial.println("deviceSetup: LoRa (LLCC68) init deferred to first use (shares HSPI with CC1101 #2)");
 
 
 

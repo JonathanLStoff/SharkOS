@@ -171,6 +171,10 @@ void setup() {
   deviceSetup();
   Serial.println("main.setup: deviceSetup() returned");
 
+  // Run boot-time radio test on all radios (CC1101x2, LoRa, NFC, nRF24).
+  // If any radio fails, LED turns red for 3 seconds.
+  bootRadioTest();
+
   // Ensure advertising is active so previously-paired clients can connect
   if (BLEDevice::getAdvertising()) {
     BLEDevice::getAdvertising()->start();
@@ -238,6 +242,22 @@ void loop() {
 
   // Update onboard RGB LED status
   updateStatusLed();
+
+  // Periodically log which radios are not working (every 30 seconds)
+  {
+    static unsigned long lastRadioLogMs = 0;
+    if (millis() - lastRadioLogMs > 30000) {
+      lastRadioLogMs = millis();
+      // Only log CC1101 failures (required hardware).
+      // LoRa/NFC/nRF24 are optional and typically not connected on this board.
+      if (!radioOk_cc1101_1 || !radioOk_cc1101_2) {
+        Serial.print("[RadioStatus] REQUIRED radio failure:");
+        if (!radioOk_cc1101_1) Serial.print(" CC1101_1");
+        if (!radioOk_cc1101_2) Serial.print(" CC1101_2");
+        Serial.println();
+      }
+    }
+  }
 
   // Main loop idle
   delay(200);

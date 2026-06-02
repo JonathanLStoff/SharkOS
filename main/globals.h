@@ -29,6 +29,7 @@
 #define u8g2_font_profont12_tr    nullptr
 #define u8g2_font_profont15_tr    nullptr
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include "USBHIDKeyboard.h"
 #include <esp_system.h>
 #include <esp_chip_info.h>
@@ -114,13 +115,12 @@ struct rf_signal {
 #define irsenderpin  38
 #define irrecivepin  39
 
-#define PN532_IRQ   6
-#define PN532_RESET 21
+
 
 // Shared Hardware SPI Bus (FSPI/SPI2) for all radio modules [3, 4]
-#define SPI_SCK    12 // Hardware FSPICLK [3]
-#define SPI_MISO   13 // Hardware FSPIQ [3]
-#define SPI_MOSI   11 // Hardware FSPID [3]
+// #define SPI_SCK    12 // Hardware FSPICLK [3]
+// #define SPI_MISO   13 // Hardware FSPIQ [3]
+// #define SPI_MOSI   11 // Hardware FSPID [3]
 
 // CC1101_1 Module (Shared SPI)
 #define CC1101_1_SCK   12 // phys 5
@@ -140,33 +140,39 @@ struct rf_signal {
 
 // ==== SPI BUS 1 (Hardware FSPI / SPI2) ====
 // Handles CC1101_1 and PN532 (NFC)
-#define SPI2_SCK    12 // Hardware FSPICLK [10]
-#define SPI2_MISO   13 // Hardware FSPIQ [10]
-#define SPI2_MOSI   11 // Hardware FSPID [10]
+// #define SPI2_SCK    12 // Hardware FSPICLK [10]
+// #define SPI2_MISO   13 // Hardware FSPIQ [10]
+// #define SPI2_MOSI   11 // Hardware FSPID [10]
 
 // PN532 (NFC) via SPI2
+#define PN532_IRQ   7
+#define PN532_RESET 21
 #define NRF_SCK    12
 #define NRF_MISO   13
 #define NRF_MOSI   11
-#define CE1_PIN    9 
-#define CSN1_PIN   10 // Hardware FSPICS0 [3]
+#define CE1_PIN    9
+#define CSN1_PIN   10 // shared with PN532SS on FSPICS0
+#define PN532SS_PIN   10 // Hardware FSPICS0 [3]
 
 // ==== SPI BUS 2 (Hardware SPI3) ====
 // Handles CC1101_2 and LoRa
 // USB pins 19 and 20 are NOT USED here to ensure code uploads work [3, 11]
-#define SPI3_SCK    5 
-#define SPI3_MISO   4 
-#define SPI3_MOSI   6 
+// #define SPI3_SCK    5 
+// #define SPI3_MISO   4 
+// #define SPI3_MOSI   6 
 
 // LoRa Module via SPI3
 #define LORA_SCK   5
 #define LORA_MISO  4
 #define LORA_MOSI  6
 #define LORA_NSS   45 // All LoRa pins moved away from 33-42 (PSRAM range) [4, 5]
-#define LORA_RESET 46 
-#define LORA_DIO0  69 // was 1
-#define LORA_DIO1  69 // was 2
-#define LORA_DIO2  17 // (Shared with CS or moved to another free pin)
+#define LORA_RESET 46
+#define LORA_DIO0  48 // not used for LLCC68/SX126x (DIO1 is primary IRQ)
+#define LORA_DIO1  48 // primary IRQ pin for LLCC68/SX126x
+#define LORA_DIO2  3 // (Shared with CS or moved to another free pin)
+#define LORA_BUSY 8
+#define L_TXEN 18
+#define L_RXEN 15
 
 #define DISRUPT_DURATION 500
 
@@ -221,6 +227,33 @@ extern int batteryPercent;
 //extern BleMouse mouse_ble;
 extern BLEServer *pServer;
 extern bool scanningRadio;
+extern String disruptorActive;
+
+// Convert power-level string ("LOW"/"MID"/"MAX") to a numeric dBm value
+inline float powerStringToDbm(const String &p) {
+  if (p == "MAX") return 12.0f;
+  if (p == "MID") return 5.0f;
+  return 0.0f; // LOW or unknown
+}
+// Persisted disruptor configuration (saved when start command is received)
+extern bool  disruptor_needs_init;
+extern float disruptor_radio1_start_mhz;
+extern float disruptor_radio1_stop_mhz;
+extern String disruptor_radio1_power; // "LOW"|"MID"|"MAX"
+extern float disruptor_radio2_start_mhz;
+extern float disruptor_radio2_stop_mhz;
+extern String disruptor_radio2_power; // "LOW"|"MID"|"MAX"
+
+// Smart disruptor settings
+extern int smart_disruptor_duration;
+extern String smart_disruptor_unit; // "sec" or "min"
+extern int smart_disruptor_rssi_floor;
+extern String smart_disruptor_radio1_power;
+extern String smart_disruptor_radio2_power;
+extern float smart_disruptor_start_mhz; // scan range start (default 400)
+extern float smart_disruptor_stop_mhz;  // scan range stop  (default 450)
+extern float smart_disruptor_best_freq; // best freq found on first run (0 = none)
+extern bool smart_disruptor_needs_init; // true when start command just received
 extern int wifi_scan_channel; // 0 = all
 extern bool wifi_scan_5ghz;   // false = 2.4 GHz only
 extern float scanFrequency;
@@ -268,7 +301,7 @@ extern RF24 radio1;
 extern ELECHOUSE_CC1101 cc1101_driver_1;
 extern ELECHOUSE_CC1101 cc1101_driver_2;
 extern Module lora_module;
-extern SX1276 lora;
+extern LLCC68 lora;
 
 extern IRrecv irrecv;
 extern IRsend irsend;
@@ -423,11 +456,26 @@ extern bool firstCommandReceived;
 void indicate_command_success();
 void indicate_command_failure();
 
+// --- Boot-time radio health tracking ---
+// Set during setup() by bootRadioTest(); checked in loop() for periodic logging.
+extern bool radioOk_cc1101_1;
+extern bool radioOk_cc1101_2;
+extern bool radioOk_lora;
+extern bool radioOk_nfc;
+extern bool radioOk_nrf24;
+void bootRadioTest();
+String getRadioStatusJson();  // run during setup() to test all radios
+
 // CC1101 / LoRa functions
 void cc1101Read();
 void cc1101Jam();
 void loraRead();
 void loraJam();
+// Disruptor functions (implemented in disrupt.ino, stubbed in disrupt-stubs.ino)
+void cc1101Disrupt(float startFreq_r1, float stopFreq_r1, float powerDbm_r1,
+                   float startFreq_r2, float stopFreq_r2, float powerDbm_r2);
+void cc1101SmartDisrupt(float powerDbm, float minRSSI, float durationSec);
+void loraDisrupt();
 
 // nRF24 functions
 void nrfscanner();

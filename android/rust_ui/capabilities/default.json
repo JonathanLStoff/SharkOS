@@ -179,6 +179,9 @@
     "log:default",
     "log:allow-log",
 
+    "dialog:default",
+    "fs:default",
+
     "shell:allow-execute",
     "shell:allow-kill",
     "shell:allow-open",

@@ -32,7 +32,6 @@ void updateRadios() {
 }
 
 void jamChannelNow(int channel) {
-  setColor(225,0,0);
   byte d1[32], d2[32];
   for (int i = 0; i < 32; i++) {
     d1[i] = random(0, 256);

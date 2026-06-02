@@ -9,10 +9,19 @@ use serde::de;
 use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
+use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
 
 mod bt;
 use crate::bt::ensure_device_available;
+
+// radio/algorithm helpers
+mod rf {
+    pub mod algorithms;
+}
+
+mod wifi_tools;
+mod recorder_store;
 // Placeholder for sensor data structure
 #[derive(Clone, serde::Serialize)]
 struct SensorData {
@@ -63,6 +72,43 @@ fn run_action(action: &str, macaddy: &str, params: Option<String>) -> Result<Str
         Err(e) => Err(e),
     }
 }
+
+// new helper command for executing algorithms implemented in Rust
+#[tauri::command]
+fn run_algorithm(name: &str, params: Option<String>) -> Result<String, String> {
+    use crate::rf::algorithms;
+    info!("[run_algorithm] {} params={:?}", name, params);
+    let result = match name {
+        "algo-symbol-timing" => {
+            // params might contain base64-encoded float samples or similar; ignore for now
+            algorithms::symbol_timing_estimator(&[]).map(|v| v.to_string())
+        }
+        "algo-crc-recovery" => algorithms::crc_recovery_stub(&[]),
+        "algo-burst-cluster" => algorithms::burst_clustering(&[], &[]).map(|v| v.to_string()),
+        "algo-entropy" => algorithms::payload_entropy(&[]).map(|v| v.to_string()),
+        "algo-fingerprint" => algorithms::protocol_fingerprint(&[]),
+        "algo-fec-recover" => algorithms::fec_recovery_attempt(&[]).map(|v| base64::encode(v)),
+        "algo-blind-rate" => algorithms::blind_rate_estimate(&[]).map(|v| format!("{:?}", v)),
+        "algo-lora-detect" => algorithms::detect_lora_frames(&[]).map(|v| v.to_string()),
+        "algo-mod-ranker" => algorithms::modulation_ranker(&[]).map(|v| format!("{:?}", v)),
+        "algo-repeater-detector" => algorithms::repetition_detector(&[], &[]).map(|v| format!("{:?}", v)),
+        "algo-aes128" => algorithms::aes128_ecb_decrypt(&[0u8;16], &[]).map(|v| base64::encode(v)),
+        "algo-caesar" => Ok(algorithms::caesar_cipher_decrypt("hello", 3)),
+        _ => Err("unknown_algorithm"),
+    };
+    result.map_err(|e| e.to_string())
+}
+
+// HTTPS decryption helper command
+#[tauri::command]
+fn decrypt_https(data_b64: &str, key_b64: &str) -> Result<String, String> {
+    // data and key are base64 encoded strings from the frontend
+    let data = base64::decode(data_b64).map_err(|e| format!("data decode: {:?}", e))?;
+    let key = base64::decode(key_b64).map_err(|e| format!("key decode: {:?}", e))?;
+    let out = crate::wifi_tools::decrypt_https_packets(&data, &key);
+    Ok(base64::encode(out))
+}
+
 #[tauri::command]
 fn trigger_bluetooth_connection_screen(macaddy: &str) -> Vec<Vec<String>> {
     info!(
@@ -238,6 +284,36 @@ fn request_permissions() -> Result<bool, String> {
     bt::request_bt_permissions(&mut env, &activity).map_err(|e| format!("perm req: {:?}", e))
 }
 
+#[tauri::command]
+fn sniffer_session_append(entries: Vec<recorder_store::SnifferPacketInput>) -> Result<recorder_store::SnifferSessionStats, String> {
+    recorder_store::append_packets(entries)
+}
+
+#[tauri::command]
+fn sniffer_session_page(offset: i64, limit: i64, min_rssi: i64) -> Result<recorder_store::SnifferPage, String> {
+    recorder_store::page_packets(offset, limit, min_rssi)
+}
+
+#[tauri::command]
+fn sniffer_session_get(id: i64) -> Result<Option<recorder_store::SnifferRecord>, String> {
+    recorder_store::get_packet(id)
+}
+
+#[tauri::command]
+fn sniffer_session_clear() -> Result<(), String> {
+    recorder_store::clear_packets()
+}
+
+#[tauri::command]
+fn sniffer_session_export_csv(path: &str, min_rssi: i64) -> Result<recorder_store::SnifferSessionStats, String> {
+    recorder_store::export_packets_csv(path, min_rssi)
+}
+
+#[tauri::command]
+fn sniffer_session_stats() -> Result<recorder_store::SnifferSessionStats, String> {
+    recorder_store::session_stats()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Ensure the global BT command table is populated at startup
@@ -248,8 +324,21 @@ pub fn run() {
         .setup(|app| {
             // initialize BT listener on startup so it can accept appended signals
             crate::bt::listener::init(&app.handle());
+            match app.path().app_cache_dir() {
+                Ok(cache_dir) => {
+                    let recorder_dir = cache_dir.join("sniffer-session");
+                    if let Err(err) = crate::recorder_store::init_session_store(recorder_dir) {
+                        error!("failed to initialize recorder store: {}", err);
+                    }
+                }
+                Err(err) => {
+                    error!("failed to resolve app cache dir for recorder store: {}", err);
+                }
+            }
             Ok(())
         })
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
@@ -262,6 +351,12 @@ pub fn run() {
             trigger_bluetooth_connection_screen,
             request_permissions,
             run_action,
+            sniffer_session_append,
+            sniffer_session_page,
+            sniffer_session_get,
+            sniffer_session_clear,
+            sniffer_session_export_csv,
+            sniffer_session_stats,
             crate::bt::listener::bt_listener_append
         ])
         .run(tauri::generate_context!())

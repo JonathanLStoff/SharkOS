@@ -49,6 +49,16 @@ fn make_bt_command_map() -> HashMap<String, String> {
         "Stop Wi‑Fi packet sniffer and flush/send collected data. No params.".into(),
     );
 
+    // Wi‑Fi Wireshark-style capture (promiscuous frame metadata)
+    m.insert(
+        "wifi.capture.start".into(),
+        "Start Wireshark-like frame capture. Streams frame metadata (src, dst, proto, len) over BLE. Params: { channel: int (1-13, default 1), filter: string (optional) }".into(),
+    );
+    m.insert(
+        "wifi.capture.stop".into(),
+        "Stop Wireshark capture. No params.".into(),
+    );
+
     // nRF (2.4GHz) scanner / analyzer (based on nrf-scanner.ino / nrf-tools.ino)
     m.insert(
         "nrf.scan.start".into(),
@@ -92,15 +102,27 @@ fn make_bt_command_map() -> HashMap<String, String> {
     );
     m.insert(
         "subghz.disruptor.start".into(),
-        "Start continuous noise/jamming on given frequency. Params: { frequency_khz: int, power_dbm: int (optional) }".into(),
+        "Start continuous noise/jamming on given frequency. Params: { radio1: { freq: number, mod: string, power: 0|1|2 }, radio2: { freq: number, mod: string, power: 0|1|2 } | null }. Response: { disruptor_status: { radio1: bool, radio2: bool } }".into(),
     );
     m.insert(
         "subghz.disruptor.stop".into(),
         "Stop disruptor. No params.".into(),
     );
     m.insert(
+        "subghz.smart.disruptor.start".into(),
+        "Start smart disruptor: first run uses both radios to scan range and saves best freq to NVS; subsequent runs use radio1 to disrupt saved freq while radio2 spectrum-scans and streams results. Params: { duration: int, unit: 'sec'|'min', rssi_floor: int, start_freq: float (default 400), stop_freq: float (default 450), radio1: { power: 0|1|2 }, radio2: { power: 0|1|2 } }. Response: { smart_disruptor_status: { radio1: bool, radio2: bool, detected: int, first_run: bool, best_freq: float } }".into(),
+    );
+    m.insert(
+        "subghz.smart.disruptor.stop".into(),
+        "Stop smart disruptor. No params.".into(),
+    );
+    m.insert(
         "subghz.test".into(),
         "Perform self-test between CC1101 radio1 and radio2 at 433MHz. No params.".into(),
+    );
+    m.insert(
+        "device.status".into(),
+        "Get device/radio health status. No params. Returns JSON with radio status, BLE state, uptime.".into(),
     );
 
     // Oscilloscope / analog sampling (based on oscilloscope.ino)
