@@ -220,6 +220,10 @@ fn make_bt_command_map() -> HashMap<String, String> {
         "status.reporting.stop".into(),
         "Stop periodic status reporting. No params.".into(),
     );
+    m.insert(
+        "wifi.mqtt.config".into(),
+        "Push WiFi + MQTT broker credentials to the ESP32. Params: { ssid, wifi_password, mqtt_host, mqtt_port, mqtt_username, mqtt_password }".into(),
+    );
 
     m
 }

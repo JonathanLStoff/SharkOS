@@ -667,7 +667,8 @@ void handleOngoingTasks() {
     }
   }
 
-  // Add other ongoing tasks if needed
+  // Maintain managed WiFi+MQTT connection (non-blocking)
+  wifiMqttLoop();
 }
 
 // handleBLECommand moved to `events.ino` (events subsystem now handles

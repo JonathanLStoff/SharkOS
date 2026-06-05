@@ -86,6 +86,41 @@ Rust checks and builds live inside `android/rust_ui` (Tauri backend + JNI helper
     Crystal frequency:  40MHz
     USB mode:           USB-Serial/JTAG
     MAC:                1c:db:d4:ad:dd:64
+## External logging: PostgreSQL & MQTT
+
+SharkOS can log every captured packet to a PostgreSQL database and/or publish it to an MQTT broker in real-time. Both are configured in the **Settings** menu inside the app.
+
+### PostgreSQL
+
+The app connects to any PostgreSQL 12+ server over plain TCP (no TLS). It creates three tables automatically on first connection:
+
+| Table | Contents |
+|-------|----------|
+| `wifi_packets` | Wi-Fi scan results — frequency, channel, RSSI, SSID, raw payload |
+| `subghz_packets` | Sub-GHz / LoRa captures — frequency, modulation, RSSI, raw hex data, radio module |
+| `bluetooth_packets` | BLE advertisement results — frequency, channel, RSSI, device name, raw payload |
+
+**Required fields:** Host/IP, Port (default `5432`), Database name, Username, Password.
+
+### MQTT
+
+The app publishes JSON payloads to an MQTT v3.1.1 broker (QoS 0, no TLS). Username and password are optional.
+
+#### MQTT Topics
+
+| Topic | Trigger | Payload fields |
+|-------|---------|---------------|
+| `sharkos/wifi/packets` | Wi-Fi scan / channel scan result | `frequency_mhz`, `channel`, `rssi`, `ssid`, `extra`, `payload_b64` |
+| `sharkos/subghz/packets` | Sub-GHz spectrum scan or packet sniffer capture | `frequency_mhz`, `modulation`, `rssi`, `data_length`, `raw_data`, `module_id` |
+| `sharkos/bluetooth/packets` | BLE advertisement scan result | `frequency_mhz`, `channel`, `rssi`, `device_name`, `extra`, `payload_b64` |
+
+Example MQTT subscription to monitor all SharkOS traffic:
+```
+mosquitto_sub -h 192.168.1.100 -t "sharkos/#" -v
+```
+
+---
+
 ## Commands & protocol
 
 SharkOS documents BLE control commands (start/stop scanners, sensor streams, status reports) in `src/bt/commands.rs`. The Android UI sends these to the ESP32; see the firmware sources in `main/` for how the device responds.
@@ -192,3 +227,10 @@ If you want a deeper developer guide (firmware flashing commands, protocol schem
 - Packet Analyzers
     - "Wi‑Fi Channel Analysis",
     - "nRF (2.4 GHz) Channel Analysis"
+
+
+MQTT config:
+- host == 192.168.1.112
+- port == 1883
+- username == sharkos
+- password == no

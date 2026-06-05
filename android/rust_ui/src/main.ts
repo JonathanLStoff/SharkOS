@@ -251,6 +251,7 @@ function showDeviceStatus(data: any) {
     addItem('LoRa (SX1276)', r.lora === 'ok' ? 'OK' : 'Not Connected', r.lora === 'ok' ? true : null);
     addItem('NFC (PN532)', r.nfc === 'ok' ? 'OK' : 'Not Connected', r.nfc === 'ok' ? true : null);
     addItem('nRF24', r.nrf24 === 'ok' ? 'OK' : 'Not Connected', r.nrf24 === 'ok' ? true : null);
+    if (r.ir !== undefined) addItem('IR (TX/RX)', r.ir === 'ok' ? 'OK' : 'Not Connected', r.ir === 'ok' ? true : null);
   }
 
   if (obj.ble_paired !== undefined) addItem('BLE Paired', obj.ble_paired ? 'Yes' : 'No', obj.ble_paired);
@@ -287,7 +288,7 @@ const menuToTemplate: Record<string, MenuMapEntry> = {
   'wifi-scan': { view: 'chart-screen', chart: 'logs' },
   'wifi-channel-scan': { view: 'chart-screen', chart: 'channels', autoRun: false },
   'sd': { view: 'chart-screen', chart: 'logs' },
-  'settings': { view: 'chart-screen', chart: 'logs' },
+  'settings': { view: 'settings-menu' },
   'about': { view: 'chart-screen', chart: 'logs' }
 };
 
@@ -1247,6 +1248,17 @@ async function flushRecorderEntries() {
       recorderTotalCount = stats.total_count;
       recorderStorageBytes = stats.storage_bytes;
       queueRecorderViewportRefresh();
+      // Log sub-ghz sniffer packets to external services (PostgreSQL + MQTT)
+      for (const entry of batch) {
+        logSignalToExternal('subghz', {
+          frequency_mhz: entry.freq,
+          modulation: entry.mod_name || 'unknown',
+          rssi: entry.rssi,
+          data_length: entry.len,
+          raw_data: entry.data || '',
+          module_id: entry.module ?? 0,
+        });
+      }
     } catch (err) {
       error(`[sniffer] append failed: ${String(err)}`);
       appendLog(`[sniffer] Failed to store packets: ${String(err)}`);
@@ -1670,6 +1682,92 @@ function saveSavedBTDevice(name: string, mac: string) {
   localStorage.setItem('savedBTDevice', JSON.stringify({ name, mac }));
 }
 
+// ── External integration settings (PostgreSQL + MQTT) ──────────────────────
+const PG_SETTINGS_KEY   = 'sharkos_pg_settings';
+const MQTT_SETTINGS_KEY = 'sharkos_mqtt_settings';
+
+function loadPgSettings(): Record<string, string | number> {
+  try { return JSON.parse(localStorage.getItem(PG_SETTINGS_KEY) || '{}'); } catch { return {}; }
+}
+function savePgSettingsLocal(s: Record<string, string | number>) {
+  localStorage.setItem(PG_SETTINGS_KEY, JSON.stringify(s));
+}
+function loadMqttSettings(): Record<string, string | number> {
+  try {
+    const s = JSON.parse(localStorage.getItem(MQTT_SETTINGS_KEY) || '{}');
+    if (s['port'] === 5672) { s['port'] = 1883; localStorage.setItem(MQTT_SETTINGS_KEY, JSON.stringify(s)); }
+    return s;
+  } catch { return {}; }
+}
+function saveMqttSettingsLocal(s: Record<string, string | number>) {
+  localStorage.setItem(MQTT_SETTINGS_KEY, JSON.stringify(s));
+}
+
+// Push WiFi + MQTT config to the connected ESP32 over BLE (fire-and-forget)
+async function pushMqttConfigToEsp(macaddy: string) {
+  const s = loadMqttSettings();
+  const host         = (s['host']         as string) || '';
+  const port         = (s['port']         as number) || 1883;
+  const username     = (s['username']     as string) || '';
+  const mqttPassword = (s['mqttPassword'] as string) || '';
+  const wifiSsid     = (s['wifiSsid']     as string) || '';
+  const wifiPassword = (s['wifiPassword'] as string) || '';
+  if (!host && !wifiSsid) return; // nothing configured yet
+  try {
+    await invoke<string>('run_action', {
+      action: 'wifi.mqtt.config',
+      macaddy,
+      params: JSON.stringify({
+        ssid: wifiSsid,
+        wifi_password: wifiPassword,
+        mqtt_host: host,
+        mqtt_port: port,
+        mqtt_username: username,
+        mqtt_password: mqttPassword,
+      }),
+    });
+  } catch (e) {
+    error('[mqtt] failed to push config to ESP32: ' + String(e));
+  }
+}
+
+// Simple per-type throttle: log at most once per 400 ms per signal type
+const _extLogLastMs: Record<string, number> = { wifi: 0, subghz: 0, bluetooth: 0 };
+const EXT_LOG_THROTTLE_MS = 400;
+
+async function logSignalToExternal(signalType: string, signalData: Record<string, unknown>) {
+  const now = Date.now();
+  if (now - (_extLogLastMs[signalType] ?? 0) < EXT_LOG_THROTTLE_MS) return;
+  _extLogLastMs[signalType] = now;
+  try {
+    await invoke('log_signal_external', {
+      signalType,
+      signalJson: JSON.stringify(signalData),
+    });
+  } catch { /* non-critical – silent drop */ }
+}
+
+// Populate the settings form fields from localStorage
+function populateSettingsForms() {
+  const pg   = loadPgSettings();
+  const mqtt = loadMqttSettings();
+  const setVal = (id: string, val: string | number | undefined) => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (el && val !== undefined) el.value = String(val);
+  };
+  setVal('pg-host',     pg['host']     as string);
+  setVal('pg-port',     pg['port']     as number || 5432);
+  setVal('pg-database', pg['database'] as string);
+  setVal('pg-username', pg['username'] as string);
+  // never pre-fill passwords from storage
+  setVal('mqtt-wifi-ssid', mqtt['wifiSsid']  as string);
+  // never pre-fill wifi-password or mqtt-password from storage
+  setVal('mqtt-host',      mqtt['host']      as string);
+  setVal('mqtt-port',      mqtt['port']      as number || 1883);
+  setVal('mqtt-username',  mqtt['username']  as string);
+  setVal('mqtt-client-id', mqtt['clientId']  as string);
+}
+
 // Update the header 'connectedDevice' display from saved device
 function updateConnectedDeviceDisplay() {
   const connected = document.getElementById('connectedDevice');
@@ -1887,7 +1985,7 @@ async function setup() {
 
     // If this action maps to a *submenu* (id ends with '-menu' or is our
     // special algorithms panel), just show it.
-    if (map && map.view && (map.view.endsWith('-menu') || map.view === 'sub-ghz-algorithms' || map.view === 'sub-ghz-disruptor' || map.view === 'sub-ghz-smart-disruptor' || map.view === 'wifi-wireshark' || map.view === 'wifi-https-cracker' || map.view === 'wifi-wpa-cracker')) {
+    if (map && map.view && (map.view.endsWith('-menu') || map.view === 'sub-ghz-algorithms' || map.view === 'sub-ghz-disruptor' || map.view === 'sub-ghz-smart-disruptor' || map.view === 'wifi-wireshark' || map.view === 'wifi-https-cracker' || map.view === 'wifi-wpa-cracker' || map.view === 'settings-menu')) {
       if (replaceHistory) history.replaceState({view: map.view}, '', '#'+action);
       else history.pushState({view: map.view}, '', '#'+action);
       showView(map.view);
@@ -1898,6 +1996,10 @@ async function setup() {
       // Lazy-init the smart disruptor chart when its section becomes visible
       if (map.view === 'sub-ghz-smart-disruptor') {
         setTimeout(() => ensureSmartDisruptorChart(), 80);
+      }
+      // Pre-fill settings forms from localStorage on open
+      if (map.view === 'settings-menu') {
+        populateSettingsForms();
       }
 
       // When opening the Sub-GHz submenu, probe CC1101 connectivity and
@@ -2705,6 +2807,46 @@ function getBleChannel(freq: number): number | null {
         } catch (e) { error('channelsChart update failed: '+String(e)); }
       }
       if (isRecording) recordedEvents.push({ type: 'radio-signal', payload: s, ts: Date.now() });
+
+      // Log to external services (PostgreSQL + MQTT) when connected
+      if (isPlaying && typeof s.frequency_mhz === 'number') {
+        const payloadStr = typeof s.payload === 'string' ? s.payload : '';
+        if (currentAction === 'wifi-channel-scan' || s.module === 4) {
+          logSignalToExternal('wifi', {
+            frequency_mhz: s.frequency_mhz,
+            channel: channel ?? 0,
+            rssi: s.rssi ?? 0,
+            ssid: s.extra || 'Unknown',
+            extra: s.extra || '',
+            payload_b64: payloadStr,
+          });
+        } else if (currentAction === 'ble-scanner' || s.module === 5) {
+          logSignalToExternal('bluetooth', {
+            frequency_mhz: s.frequency_mhz,
+            channel: getBleChannel(s.frequency_mhz) ?? 0,
+            rssi: s.rssi ?? 0,
+            device_name: s.extra || 'Unknown',
+            extra: s.extra || '',
+            payload_b64: payloadStr,
+          });
+        } else {
+          // Sub-GHz (CC1101 / LoRa)
+          const m1 = (document.getElementById('subghzModSelect1') as HTMLSelectElement | null)?.value || 'OOK';
+          const m2 = (document.getElementById('subghzModSelect2') as HTMLSelectElement | null)?.value || '2-FSK';
+          const mod = (s.module === 0) ? m1 : (s.module === 1) ? m2 : 'LoRa';
+          let dataLen = 0;
+          if (typeof s.payload === 'string') { try { dataLen = atob(s.payload).length; } catch { dataLen = s.payload.length / 2; } }
+          else if (Array.isArray(s.payload)) { dataLen = s.payload.length; }
+          logSignalToExternal('subghz', {
+            frequency_mhz: s.frequency_mhz,
+            modulation: mod,
+            rssi: s.rssi ?? 0,
+            data_length: dataLen,
+            raw_data: payloadStr,
+            module_id: s.module ?? 0,
+          });
+        }
+      }
     };
 
     // `raw` may be a string (PROTO:base64 or JSON), an already-parsed object,
@@ -2990,6 +3132,68 @@ function getBleChannel(freq: number): number | null {
 
   // update header from any saved device
   updateConnectedDeviceDisplay();
+
+  // ── Settings menu: PostgreSQL ────────────────────────────────────────────
+  function setPgStatus(msg: string, ok: boolean | null) {
+    const dot = document.getElementById('pg-status-dot');
+    const txt = document.getElementById('pg-status');
+    if (dot) dot.className = 'status-dot' + (ok === true ? ' ok' : ok === false ? ' err' : '');
+    if (txt) txt.textContent = msg;
+  }
+  async function applyPgSettings() {
+    const host     = (document.getElementById('pg-host')     as HTMLInputElement)?.value.trim() || '';
+    const port     = parseInt((document.getElementById('pg-port') as HTMLInputElement)?.value || '5432', 10);
+    const database = (document.getElementById('pg-database') as HTMLInputElement)?.value.trim() || '';
+    const username = (document.getElementById('pg-username') as HTMLInputElement)?.value.trim() || '';
+    const password = (document.getElementById('pg-password') as HTMLInputElement)?.value || '';
+    if (!host || !database) { setPgStatus('Host and database are required', false); return; }
+    setPgStatus('Connecting…', null);
+    try {
+      const msg = await invoke<string>('set_pg_settings', { host, port, database, username, password });
+      savePgSettingsLocal({ host, port, database, username });
+      setPgStatus(msg, true);
+    } catch (e) {
+      setPgStatus(String(e), false);
+    }
+  }
+  document.getElementById('pg-save')?.addEventListener('click', () => void applyPgSettings());
+  document.getElementById('pg-test')?.addEventListener('click', () => void applyPgSettings());
+
+  // ── Settings menu: MQTT ──────────────────────────────────────────────────
+  function setMqttStatus(msg: string, ok: boolean | null) {
+    const dot = document.getElementById('mqtt-status-dot');
+    const txt = document.getElementById('mqtt-status');
+    if (dot) dot.className = 'status-dot' + (ok === true ? ' ok' : ok === false ? ' err' : '');
+    if (txt) txt.textContent = msg;
+  }
+  async function applyMqttSettings() {
+    const wifiSsid    = (document.getElementById('mqtt-wifi-ssid')     as HTMLInputElement)?.value.trim() || '';
+    const wifiPass    = (document.getElementById('mqtt-wifi-password') as HTMLInputElement)?.value || '';
+    const host        = (document.getElementById('mqtt-host')          as HTMLInputElement)?.value.trim() || '';
+    const port        = parseInt((document.getElementById('mqtt-port') as HTMLInputElement)?.value || '1883', 10);
+    const username    = (document.getElementById('mqtt-username')      as HTMLInputElement)?.value.trim() || '';
+    const password    = (document.getElementById('mqtt-password')      as HTMLInputElement)?.value || '';
+    const clientId    = (document.getElementById('mqtt-client-id')     as HTMLInputElement)?.value.trim() || 'sharkos-1';
+    if (!host) { setMqttStatus('Broker host is required', false); return; }
+    setMqttStatus('Connecting…', null);
+    try {
+      const msg = await invoke<string>('set_mqtt_settings', { host, port, username, password, clientId });
+      // persist everything (passwords included so ESP32 push works on future opens)
+      const toSave: Record<string, string | number> = { host, port, username, clientId };
+      if (wifiSsid)  toSave['wifiSsid']     = wifiSsid;
+      if (wifiPass)  toSave['wifiPassword']  = wifiPass;
+      if (password)  toSave['mqttPassword']  = password;
+      saveMqttSettingsLocal(toSave);
+      setMqttStatus(msg, true);
+      // push WiFi+MQTT config to the connected ESP32
+      const macaddy = loadSavedBTDevice()?.mac || '';
+      void pushMqttConfigToEsp(macaddy);
+    } catch (e) {
+      setMqttStatus(String(e), false);
+    }
+  }
+  document.getElementById('mqtt-save')?.addEventListener('click', () => void applyMqttSettings());
+  document.getElementById('mqtt-test')?.addEventListener('click', () => void applyMqttSettings());
 
   // recorder control hooks
   document.getElementById('recorder-thresh')?.addEventListener('input', () => {
@@ -3513,7 +3717,9 @@ function getBleChannel(freq: number): number | null {
     requestBluetoothConnectionRust("").catch(e => error(String(e))); 
   } else if (saved.mac && saved.mac.length > 0) {
     // pass saved MAC to Rust command on startup
-    requestBluetoothConnectionRust(saved.mac).catch(e => error(String(e))); 
+    requestBluetoothConnectionRust(saved.mac).catch(e => error(String(e)));
+    // after a brief pause for BLE to establish, push WiFi+MQTT config to ESP32
+    setTimeout(() => { void pushMqttConfigToEsp(saved.mac ?? ''); }, 4000);
   }
   info('setup: persistent device checked');
   info('setup: complete');

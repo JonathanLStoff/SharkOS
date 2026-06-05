@@ -559,6 +559,7 @@ bool wifi_showInfo = false;
 
 // PN532 NFC — connected via SPI (FSPI), CS = PN532SS_PIN (GPIO 10)
 // Shares FSPI bus with CC1101 #1 and nRF24.
+// PN532 in SPI mode on the shared FSPI bus (SCK=12, MISO=13, MOSI=11, CS=10).
 Adafruit_PN532 nfc(PN532SS_PIN, &SPI);
 
 // Peripheral pin macros moved to globals.h (so all modules include them)
@@ -670,6 +671,7 @@ void deviceSetup() {
 
   IrReceiver.begin(irrecivepin);
   IrSender.begin(irsenderpin);
+  radioOk_ir = true;  // both IR pins defined and libs initialized
 
   delay(10); // yield to WDT
 
@@ -688,35 +690,60 @@ void deviceSetup() {
   cc1101_driver_1.setSpiPin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, CC1101_1_CS);
   cc1101_driver_1.setGDO(CC1101_1_GDO0, CC1101_1_GDO2);
   cc1101_driver_1.Init();
-  cc1101_driver_1.setCCMode(true);   // IOCFG0=0x06 (sync word indicator) — required for SendData() GDO0 polling
-  cc1101_driver_1.setGDO0(CC1101_1_GDO0);  // re-set GDO0 as INPUT (setGDO sets it as OUTPUT)
+  cc1101_driver_1.setCCMode(true);
+  cc1101_driver_1.setGDO0(CC1101_1_GDO0);
   cc1101_driver_1.setMHZ(433.92);
-  Serial.println("CC1101 #1 init OK");
-  delay(10); // yield to WDT
-
-  // NFC init — PN532 is on FSPI (SPI2), CS = PN532SS_PIN (GPIO 10).
-  // Must happen AFTER CC1101 #1 Init() which sets up FSPI with correct pins.
-  // Idle CC1101 #1 so it doesn't contend on the shared FSPI bus.
-  deactivateNRF1();          // nRF24 shares CS pin 10
-  deactivateCC1101();        // idle CC1101 #1 on same bus
-  delay(10); // yield to WDT
-
-  Serial.println("deviceSetup: NFC init (SPI, guarded)");
-  nfc.begin();  // initialises SPI transport to PN532
-  // nfc.begin() calls SPI.begin() without pin args, which resets FSPI to
-  // default ESP32-S3 pins (36/37/35). Restore the correct FSPI pins so
-  // CC1101 #1 (and subsequent FSPI users) still work.
-  SPI.end();
-  SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, -1);
-  delay(10); // yield to WDT
-  uint32_t nfcVersion = nfc.getFirmwareVersion();
-  if (nfcVersion) {
-    Serial.print("PN532 found, FW: "); Serial.println(nfcVersion, HEX);
-    nfc.SAMConfig();
-  } else {
-    Serial.println("PN532 not found — skipping NFC init");
+  {
+    byte pn = cc1101_driver_1.SpiReadStatus(0x30);  // PARTNUM — always 0x00 for CC1101
+    byte ver = cc1101_driver_1.SpiReadStatus(0x31); // VERSION — 0x14 genuine, varies on clones
+    radioOk_cc1101_1 = (pn == 0x00 && ver != 0x00 && ver != 0xFF);
+    Serial.printf("CC1101 #1 PARTNUM=0x%02X VERSION=0x%02X %s\n", pn, ver, radioOk_cc1101_1 ? "OK" : "FAIL");
   }
   delay(10); // yield to WDT
+
+  // NFC init — PN532 in SPI mode on shared FSPI bus (SCK=12 MISO=13 MOSI=11 CS=10).
+  // Deassert all other CS pins on the bus before touching PN532.
+  deactivateNRF1();
+  deactivateCC1101();
+  delay(10);
+
+  Serial.printf("deviceSetup: NFC init (SPI CS=GPIO%d RST=GPIO%d)\n",
+                PN532SS_PIN, PN532_RESET);
+
+  // Hardware reset — the Adafruit SPI constructor has no reset pin, so toggle manually.
+  pinMode(PN532_RESET, OUTPUT);
+  digitalWrite(PN532_RESET, HIGH);
+  delay(10);
+  digitalWrite(PN532_RESET, LOW);
+  delay(20);
+  digitalWrite(PN532_RESET, HIGH);
+  delay(100); // PN532 needs ~100ms after RSTPD de-asserted
+
+  // nfc.begin() internally calls SPI.begin() with no args, which resets FSPI to
+  // ESP32-S3 defaults. Restore the correct FSPI pins immediately after.
+  nfc.begin();
+  SPI.end();
+  SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, -1);
+  delay(50); // give PN532 time to settle on the restored bus
+
+  uint32_t nfcVersion = 0;
+  for (int attempt = 0; attempt < 4 && nfcVersion == 0; attempt++) {
+    nfcVersion = nfc.getFirmwareVersion();
+    if (!nfcVersion) {
+      Serial.printf("PN532 no response (attempt %d/4)\n", attempt + 1);
+      delay(150);
+    }
+  }
+
+  radioOk_nfc = (nfcVersion != 0);
+  if (nfcVersion) {
+    Serial.printf("PN532 found FW=0x%08X\n", nfcVersion);
+    nfc.SAMConfig();
+  } else {
+    Serial.printf("PN532 not found — verify SPI wiring: SCK=GPIO%d MISO=GPIO%d MOSI=GPIO%d CS=GPIO%d RST=GPIO%d\n",
+                  CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, PN532SS_PIN, PN532_RESET);
+  }
+  delay(10);
 
   // Init CC1101 #2 — uses its own HSPI (SPI3) bus so it cannot conflict with driver_1's FSPI
   Serial.println("deviceSetup: initializing CC1101 #2");
@@ -724,10 +751,15 @@ void deviceSetup() {
   cc1101_driver_2.setSpiPin(CC1101_2_SCK, CC1101_2_MISO, CC1101_2_MOSI, CC1101_2_CS);
   cc1101_driver_2.setGDO(CC1101_2_GDO0, CC1101_2_GDO2);
   cc1101_driver_2.Init();
-  cc1101_driver_2.setCCMode(true);   // IOCFG0=0x06 (sync word indicator) — required for SendData() GDO0 polling
-  cc1101_driver_2.setGDO0(CC1101_2_GDO0);  // re-set GDO0 as INPUT (setGDO sets it as OUTPUT)
+  cc1101_driver_2.setCCMode(true);
+  cc1101_driver_2.setGDO0(CC1101_2_GDO0);
   cc1101_driver_2.setMHZ(433.92);
-  Serial.println("CC1101 #2 init OK");
+  {
+    byte pn = cc1101_driver_2.SpiReadStatus(0x30);
+    byte ver = cc1101_driver_2.SpiReadStatus(0x31);
+    radioOk_cc1101_2 = (pn == 0x00 && ver != 0x00 && ver != 0xFF);
+    Serial.printf("CC1101 #2 PARTNUM=0x%02X VERSION=0x%02X %s\n", pn, ver, radioOk_cc1101_2 ? "OK" : "FAIL");
+  }
 
   // LoRa init — deferred to first use (lora.begin() is called by the scan
   // handler in events.ino or the radio test in subghz_control.ino).
@@ -810,9 +842,10 @@ void deviceSetup() {
   
   
   
+  // Load saved WiFi+MQTT config and start background connection (non-blocking)
+  wifiMqttSetup();
+
   Serial.println("deviceSetup: COMPLETE");
-  //activateSD();
-  
 }
 
 // Example helper: send a small test RadioSignal via first CC1101

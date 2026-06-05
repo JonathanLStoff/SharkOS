@@ -124,16 +124,18 @@ public:
       dev->setModulation(2);
     } 
 
-    // Put radio into receive mode once before sweep
-    dev->SetRx();
-    delay(2); // initial RX settle
-
     for (float f = low; f <= high && scanningRadio; f += stepMHz) {
+      // IDLE → setMHZ → SRX ensures a clean PLL calibration on every hop.
+      // Calibration takes ~720µs; RSSI register needs ~3ms to settle after that.
+      dev->SpiStrobe(CC1101_SIDLE);
       dev->setMHZ(f);
-      // Re-enter RX after frequency change for RSSI to update
-      dev->SetRx();
-      delay(1); // 1ms settle for RSSI register to update
-      int32_t rssi = (int32_t)dev->getRssi();
+      dev->SpiStrobe(CC1101_SRX);
+      delayMicroseconds(4000); // 4ms: calibration + RSSI settle
+
+      // Read RSSI register directly and convert per CC1101 datasheet §10.3
+      byte rssi_raw = dev->SpiReadStatus(0x34);
+      int32_t rssi = (rssi_raw >= 128) ? ((int32_t)rssi_raw - 256) / 2 - 74
+                                       : (int32_t)rssi_raw / 2 - 74;
 
       uint32_t freq_khz = (uint32_t)(f * 1000.0f);
       uint8_t sample[7];
@@ -148,6 +150,7 @@ public:
       events_enqueue_radio_bytes((int)moduleId, sample, sizeof(sample), f, rssi);
       hw_send_radio_signal_protobuf((int)moduleId, f, rssi, sample, sizeof(sample), "scan_range");
     }
+    dev->SpiStrobe(CC1101_SIDLE); // leave radio idle after sweep
   }
 };
 
@@ -234,16 +237,17 @@ public:
 
     if (modulation == MOD_OOK || modulation == MOD_ASK) {
       dev->setModulation(2);
-    } 
-
-    dev->SetRx();
-    delay(2); 
+    }
 
     for (float f = low; f <= high && scanningRadio; f += stepMHz) {
+      dev->SpiStrobe(CC1101_SIDLE);
       dev->setMHZ(f);
-      dev->SetRx();
-      delay(1); 
-      int32_t rssi = (int32_t)dev->getRssi();
+      dev->SpiStrobe(CC1101_SRX);
+      delayMicroseconds(4000);
+
+      byte rssi_raw = dev->SpiReadStatus(0x34);
+      int32_t rssi = (rssi_raw >= 128) ? ((int32_t)rssi_raw - 256) / 2 - 74
+                                       : (int32_t)rssi_raw / 2 - 74;
 
       uint32_t freq_khz = (uint32_t)(f * 1000.0f);
       uint8_t sample[7];
@@ -258,6 +262,7 @@ public:
       events_enqueue_radio_bytes((int)moduleId, sample, sizeof(sample), f, rssi);
       hw_send_radio_signal_protobuf((int)moduleId, f, rssi, sample, sizeof(sample), "scan_range");
     }
+    dev->SpiStrobe(CC1101_SIDLE);
   }
 };
 

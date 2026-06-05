@@ -76,14 +76,15 @@ fn send_to_device(mac: &str, bt_cmd: &str) -> Result<String, String> {
     #[cfg(target_os = "android")]
     {
         info!("sending command '{}' to device {} (Android JNI)", bt_cmd, mac);
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+        let ctx = tauri::tao::platform::android::prelude::main_android_context()
+            .ok_or_else(|| "android context not ready yet".to_string())?;
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }
             .map_err(|e| format!("jni vm error: {:?}", e))?;
         let mut env = vm.attach_current_thread().map_err(|e| format!("attach err: {:?}", e))?;
         use jni::objects::JValue;
         use jni::objects::JObject;
 
-        let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let activity = unsafe { JObject::from_raw(ctx.context_jobject.cast()) };
         let jmac = env.new_string(mac).map_err(|e| format!("jni new_string mac: {:?}", e))?;
         let jcmd = env.new_string(bt_cmd).map_err(|e| format!("jni new_string cmd: {:?}", e))?;
         let jmac_obj = JObject::from(jmac);

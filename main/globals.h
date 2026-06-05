@@ -107,8 +107,6 @@ struct rf_signal {
 #define ANALOG_PIN 3
 #define WAVE_OUT_PIN 47 // Moved from 48 (hardwired to onboard RGB LED) [1, 2]
 
-#define I2C_SDA 8
-#define I2C_SCL 7
 
 // ==== IR Pins ====
 // Moved from GPIO 1/2 to 38/39 — GPIOs 1 & 2 are now CC1101 GDO0 pins
@@ -420,6 +418,17 @@ void wavecreator();
 // Restart helpers
 void restartDevice();
 
+// WiFi + MQTT managed connection (mqtt_wifi.ino)
+// Non-blocking — safe to call from main loop every iteration.
+void wifiMqttSetup();
+void wifiMqttLoop();
+void wifiMqttConfig(const String &ssid, const String &wpwd,
+                    const String &mhost, int mport,
+                    const String &muser, const String &mpwd);
+void wifiMqttSuspend(); // call before any WiFi radio action
+void wifiMqttResume();  // call when WiFi radio action finishes
+bool wifiMqttIsConnected();
+
 // Extern image/frame arrays used across files
 extern const uint8_t* nosdFrames[];
 // BLE / scanners
@@ -463,6 +472,7 @@ extern bool radioOk_cc1101_2;
 extern bool radioOk_lora;
 extern bool radioOk_nfc;
 extern bool radioOk_nrf24;
+extern bool radioOk_ir;
 void bootRadioTest();
 String getRadioStatusJson();  // run during setup() to test all radios
 

@@ -22,6 +22,8 @@ mod rf {
 
 mod wifi_tools;
 mod recorder_store;
+mod pg_logger;
+mod mqtt_publisher;
 // Placeholder for sensor data structure
 #[derive(Clone, serde::Serialize)]
 struct SensorData {
@@ -41,15 +43,20 @@ struct CellScanResult {
     timestamp: u64,
 }
 
-/// Helper: obtain JNIEnv + Activity JObject from ndk_context.
-/// The Activity pointer comes from `ndk_context::android_context().context()`,
-/// which in Tauri Android is the real MainActivity – not Application context.
+/// Helper: obtain JNIEnv + Activity JObject from tao's Android context.
+/// Tauri 2 / tao stores the VM+activity in its own CONTEXTS map; ndk-context is never
+/// populated by this stack, so we go directly to tao.
 fn get_jni_and_activity() -> Result<(jni::JavaVM, JObject<'static>), jni::errors::Error> {
-    let ctx = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }?;
-    // ctx.context() is the Activity pointer in Tauri Android
-    let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
-    Ok((vm, activity))
+    #[cfg(target_os = "android")]
+    {
+        let ctx = tauri::tao::platform::android::prelude::main_android_context()
+            .ok_or(jni::errors::Error::JniCall(jni::errors::JniError::Unknown))?;
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }?;
+        let activity = unsafe { JObject::from_raw(ctx.context_jobject.cast()) };
+        return Ok((vm, activity));
+    }
+    #[cfg(not(target_os = "android"))]
+    Err(jni::errors::Error::JniCall(jni::errors::JniError::Unknown))
 }
 #[tauri::command]
 fn run_action(action: &str, macaddy: &str, params: Option<String>) -> Result<String, String> {
@@ -314,6 +321,84 @@ fn sniffer_session_stats() -> Result<recorder_store::SnifferSessionStats, String
     recorder_store::session_stats()
 }
 
+/// Connect to a PostgreSQL server and create the three signal tables.
+/// Called from the Settings menu when the user saves PG credentials.
+#[tauri::command]
+async fn set_pg_settings(
+    host: String,
+    port: u16,
+    database: String,
+    username: String,
+    password: String,
+) -> Result<String, String> {
+    pg_logger::connect(&host, port, &database, &username, &password).await?;
+    Ok(format!("Connected to PostgreSQL at {host}:{port}/{database}"))
+}
+
+/// Connect to an MQTT broker.
+/// Called from the Settings menu when the user saves MQTT credentials.
+#[tauri::command]
+async fn set_mqtt_settings(
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    client_id: String,
+) -> Result<String, String> {
+    let user = if username.is_empty() { None } else { Some(username.as_str()) };
+    let pass = if password.is_empty() { None } else { Some(password.as_str()) };
+    let cid = if client_id.is_empty() { "sharkos" } else { &client_id };
+    mqtt_publisher::connect(&host, port, cid, user, pass).await?;
+    Ok(format!("Connected to MQTT broker at {host}:{port}"))
+}
+
+/// Log a captured signal to PostgreSQL and publish it to MQTT.
+/// `signal_type` is one of "wifi", "subghz", or "bluetooth".
+/// `signal_json` is a JSON string whose fields depend on the type:
+///   wifi     – frequency_mhz, channel, rssi, ssid, extra, payload_b64
+///   subghz   – frequency_mhz, modulation, rssi, data_length, raw_data, module_id
+///   bluetooth– frequency_mhz, channel, rssi, device_name, extra, payload_b64
+#[tauri::command]
+async fn log_signal_external(signal_type: String, signal_json: String) -> Result<(), String> {
+    // Parse JSON – if it fails just silently drop (non-critical path)
+    let v: serde_json::Value = match serde_json::from_str(&signal_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+
+    let freq      = v["frequency_mhz"].as_f64().unwrap_or(0.0);
+    let rssi      = v["rssi"].as_i64().unwrap_or(0) as i32;
+
+    match signal_type.as_str() {
+        "wifi" => {
+            let channel     = v["channel"].as_i64().unwrap_or(0) as i32;
+            let ssid        = v["ssid"].as_str().unwrap_or("");
+            let extra       = v["extra"].as_str().unwrap_or("");
+            let payload_b64 = v["payload_b64"].as_str().unwrap_or("");
+            let _ = pg_logger::log_wifi(freq, channel, rssi, ssid, extra, payload_b64).await;
+            let _ = mqtt_publisher::publish("sharkos/wifi/packets", &signal_json).await;
+        }
+        "subghz" => {
+            let modulation  = v["modulation"].as_str().unwrap_or("unknown");
+            let data_length = v["data_length"].as_i64().unwrap_or(0) as i32;
+            let raw_data    = v["raw_data"].as_str().unwrap_or("");
+            let module_id   = v["module_id"].as_i64().unwrap_or(0) as i32;
+            let _ = pg_logger::log_subghz(freq, modulation, rssi, data_length, raw_data, module_id).await;
+            let _ = mqtt_publisher::publish("sharkos/subghz/packets", &signal_json).await;
+        }
+        "bluetooth" => {
+            let channel     = v["channel"].as_i64().unwrap_or(0) as i32;
+            let device_name = v["device_name"].as_str().unwrap_or("");
+            let extra       = v["extra"].as_str().unwrap_or("");
+            let payload_b64 = v["payload_b64"].as_str().unwrap_or("");
+            let _ = pg_logger::log_bluetooth(freq, channel, rssi, device_name, extra, payload_b64).await;
+            let _ = mqtt_publisher::publish("sharkos/bluetooth/packets", &signal_json).await;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Ensure the global BT command table is populated at startup
@@ -351,13 +436,18 @@ pub fn run() {
             trigger_bluetooth_connection_screen,
             request_permissions,
             run_action,
+            run_algorithm,
+            decrypt_https,
             sniffer_session_append,
             sniffer_session_page,
             sniffer_session_get,
             sniffer_session_clear,
             sniffer_session_export_csv,
             sniffer_session_stats,
-            crate::bt::listener::bt_listener_append
+            crate::bt::listener::bt_listener_append,
+            set_pg_settings,
+            set_mqtt_settings,
+            log_signal_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

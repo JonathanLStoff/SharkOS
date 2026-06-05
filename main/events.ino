@@ -406,10 +406,10 @@ static void stop_active_scan_internal() {
   if (activeScan == SCAN_SUBGHZ) scanningRadio = false;
   if (activeScan == SCAN_NFC_POLL) readingNfc = false;
   if (activeScan == SCAN_WIFI_CAPTURE) {
-    // Disable promiscuous mode and re-init WiFi to normal state
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(nullptr);
     Serial.println("[WiFiCapture] promiscuous mode disabled");
+    wifiMqttResume(); // reconnect managed WiFi now that radio is free
   }
 
   activeScan = SCAN_NONE;
@@ -494,6 +494,9 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
         wifiCapHopping = false;
       }
     }
+
+    // Drop managed WiFi+MQTT before taking the radio into promiscuous mode
+    wifiMqttSuspend();
 
     // Set up promiscuous mode
     WiFi.disconnect(true, true);
@@ -1489,6 +1492,24 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
   }
   if (key == CMD_STATUS_REPORT_START) { start_scan_for_key(String(CMD_STATUS_REPORT_START), params); return; }
   if (key == CMD_STATUS_REPORT_STOP)  { stop_scan_for_key(String(CMD_STATUS_REPORT_STOP)); return; }
+
+  // ── WiFi + MQTT config (wifi.mqtt.config) ──────────────────────────────
+  // Params: { ssid, wifi_password, mqtt_host, mqtt_port, mqtt_username, mqtt_password }
+  if (key == CMD_WIFI_MQTT_CONFIG) {
+    String ssid, wpwd, mhost, muser, mpwd;
+    int mport = 1883;
+    if (params) {
+      if (params->containsKey("ssid"))           ssid  = (*params)["ssid"].as<String>();
+      if (params->containsKey("wifi_password"))   wpwd  = (*params)["wifi_password"].as<String>();
+      if (params->containsKey("mqtt_host"))       mhost = (*params)["mqtt_host"].as<String>();
+      if (params->containsKey("mqtt_port"))       mport = (*params)["mqtt_port"].as<int>();
+      if (params->containsKey("mqtt_username"))   muser = (*params)["mqtt_username"].as<String>();
+      if (params->containsKey("mqtt_password"))   mpwd  = (*params)["mqtt_password"].as<String>();
+    }
+    wifiMqttConfig(ssid, wpwd, mhost, mport, muser, mpwd);
+    bluetooth_send_response_internal("wifi.mqtt.config:ok");
+    return;
+  }
 
   // Fallback: unknown command
   bluetooth_send_response_internal("ERROR:unknown_command_key");

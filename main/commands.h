@@ -76,6 +76,9 @@ static const char CMD_FILES_LIST[] = "files.list"; // optional param: path
 static const char CMD_IR_RECV_START[] = "ir.recv.start";
 static const char CMD_IR_RECV_STOP[]  = "ir.recv.stop";
 
+// WiFi + MQTT device config (push SSID/password + broker settings to ESP32)
+static const char CMD_WIFI_MQTT_CONFIG[] = "wifi.mqtt.config";
+
 // Convenience / control
 static const char CMD_LIST_PAIRED_DEVICES[] = "list.paired.devices";
 static const char CMD_PAIR_SET[]             = "pair.set"; // params: { pin: string|int }
@@ -129,6 +132,7 @@ static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_FILES_LIST,
     CMD_IR_RECV_START,
     CMD_IR_RECV_STOP,
+    CMD_WIFI_MQTT_CONFIG,
     CMD_LIST_PAIRED_DEVICES,
     CMD_PAIR_SET,
     CMD_BATTERY_INFO,

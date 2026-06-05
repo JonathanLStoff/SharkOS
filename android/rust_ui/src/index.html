@@ -75,7 +75,18 @@
       .panels{overflow:hidden}
 
       /* Menus and submenus should scroll as full-page lists */
-      #main-menu, .submenu, #wifi-menu, #ble-menu, #sub-ghz-menu, #sub-ghz-disruptor, #sub-ghz-smart-disruptor { overflow-y:auto; flex:1; min-height:0; }
+      #main-menu, .submenu, #wifi-menu, #ble-menu, #sub-ghz-menu, #sub-ghz-disruptor, #sub-ghz-smart-disruptor, #settings-menu { overflow-y:auto; flex:1; min-height:0; }
+      /* Settings form inputs */
+      .settings-input{width:100%;padding:7px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:var(--text);font-size:13px;box-sizing:border-box}
+      .settings-card{background:var(--bg-panel);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,0.05);margin-bottom:12px}
+      .settings-card h4{margin:0 0 12px;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+      .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+      .settings-grid .full{grid-column:1/-1}
+      .settings-label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:12px}
+      .settings-row{display:flex;gap:8px;align-items:center;margin-top:10px}
+      .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--muted)}
+      .status-dot.ok{background:#22c55e}
+      .status-dot.err{background:#ef4444}
 
       /* Device picker modal */
       #device-picker-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px}
@@ -632,6 +643,7 @@
               <span id="recorder-count" style="color:var(--muted);font-size:11px">0 packets</span>
               <span id="recorder-size-warn" style="color:#FF5722;font-size:11px;display:none">&#9888; Storage large</span>
             </div>
+            <!-- TODO: fix the scrolling to work, it keeps snapping back to the top all the time. -->
             <div id="recorder-table-scroll" style="overflow:auto;max-height:250px">
               <table id="recorder-table" style="width:100%;border-collapse:collapse;font-size:11px">
                 <thead><tr><th>Time</th><th>Freq</th><th>Mod</th><th>RSSI</th><th>Len</th><th>Data</th><th></th></tr></thead>
@@ -672,6 +684,85 @@
         <div class="panels">
           <h3 style="margin-top:0;color:var(--muted)">Sensor Live (accelerometer)</h3>
           <div id="chart-container" style="position:relative;flex:1;min-height:0"><canvas id="sensorChart" class="chart-canvas"></canvas></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS MENU -->
+      <section id="settings-menu" hidden=true>
+        <div style="padding:4px 0">
+
+          <!-- PostgreSQL Card -->
+          <div class="settings-card">
+            <h4>PostgreSQL Database</h4>
+            <div class="settings-grid">
+              <label class="settings-label">Host / IP
+                <input id="pg-host" class="settings-input" type="text" placeholder="192.168.1.100" autocomplete="off" />
+              </label>
+              <label class="settings-label">Port
+                <input id="pg-port" class="settings-input" type="number" value="5432" min="1" max="65535" />
+              </label>
+              <label class="settings-label">Database
+                <input id="pg-database" class="settings-input" type="text" placeholder="sharkos" autocomplete="off" />
+              </label>
+              <label class="settings-label">Username
+                <input id="pg-username" class="settings-input" type="text" placeholder="postgres" autocomplete="off" />
+              </label>
+              <label class="settings-label full">Password
+                <input id="pg-password" class="settings-input" type="password" placeholder="••••••••" autocomplete="new-password" />
+              </label>
+            </div>
+            <div class="settings-row">
+              <button id="pg-save" class="btn" style="font-size:13px;padding:6px 14px">Save &amp; Connect</button>
+              <button id="pg-test" class="btn secondary" style="font-size:13px;padding:6px 14px">Test</button>
+              <span id="pg-status-dot" class="status-dot"></span>
+              <span id="pg-status" style="color:var(--muted);font-size:12px"></span>
+            </div>
+          </div>
+
+          <!-- MQTT + WiFi Card -->
+          <div class="settings-card">
+            <h4>WiFi Network <span style="font-size:11px;color:var(--muted)">(for MQTT)</span></h4>
+            <div class="settings-grid">
+              <label class="settings-label">Network SSID
+                <input id="mqtt-wifi-ssid" class="settings-input" type="text" placeholder="MyNetwork" autocomplete="off" />
+              </label>
+              <label class="settings-label">WiFi Password
+                <input id="mqtt-wifi-password" class="settings-input" type="password" placeholder="" autocomplete="new-password" />
+              </label>
+            </div>
+            <h4 style="margin-top:12px">MQTT Broker</h4>
+            <div class="settings-grid">
+              <label class="settings-label">Broker Host / IP
+                <input id="mqtt-host" class="settings-input" type="text" placeholder="192.168.1.100" autocomplete="off" />
+              </label>
+              <label class="settings-label">Port
+                <input id="mqtt-port" class="settings-input" type="number" value="1883" min="1" max="65535" />
+              </label>
+              <label class="settings-label">Username <span style="font-size:10px">(optional)</span>
+                <input id="mqtt-username" class="settings-input" type="text" placeholder="" autocomplete="off" />
+              </label>
+              <label class="settings-label">Password <span style="font-size:10px">(optional)</span>
+                <input id="mqtt-password" class="settings-input" type="password" placeholder="" autocomplete="new-password" />
+              </label>
+              <label class="settings-label full">Client ID
+                <input id="mqtt-client-id" class="settings-input" type="text" placeholder="sharkos-1" autocomplete="off" />
+              </label>
+            </div>
+            <div class="settings-row">
+              <button id="mqtt-save" class="btn" style="font-size:13px;padding:6px 14px">Save &amp; Connect</button>
+              <button id="mqtt-test" class="btn secondary" style="font-size:13px;padding:6px 14px">Test</button>
+              <span id="mqtt-status-dot" class="status-dot"></span>
+              <span id="mqtt-status" style="color:var(--muted);font-size:12px"></span>
+            </div>
+          </div>
+
+          <!-- Info -->
+          <div style="color:var(--muted);font-size:11px;padding:4px 2px;line-height:1.6">
+            When connected, all scan results are logged in real-time.<br>
+            PostgreSQL tables: <code>wifi_packets</code>, <code>subghz_packets</code>, <code>bluetooth_packets</code><br>
+            MQTT topics: <code>sharkos/wifi/packets</code> &nbsp;·&nbsp; <code>sharkos/subghz/packets</code> &nbsp;·&nbsp; <code>sharkos/bluetooth/packets</code>
+          </div>
+
         </div>
       </section>
 
