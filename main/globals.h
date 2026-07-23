@@ -279,6 +279,26 @@ extern std::vector<blescanner_Device> blescanner_devices;
 extern int blescanner_selectedIndex;
 extern BLEScan* blescanner_pBLEScan;
 
+// BLE emulator state (defined in ble-emulator.ino)
+extern bool g_bleEmulating;
+extern String g_bleEmulateName;
+
+// ── Control-transport exclusivity (BLE vs WiFi) ──
+// The first transport to pair locks out the other until reboot.
+enum SharkTransport {
+  XPORT_NONE = 0,
+  XPORT_BLE,
+  XPORT_WIFI,
+};
+extern volatile int g_activeTransport;      // defined in wifi_control.ino
+extern volatile bool g_wifiClientConnected; // true while a WiFi control client is connected
+
+// WiFi control transport (hidden SoftAP + TCP command server)
+void wifiCtrlSetup();
+void wifiCtrlLoop();
+bool wifiCtrlSend(const char *s);
+void sharkLockTransport(int which);
+
 extern int wifi_selectedIndex;
 extern int wifi_networkCount;
 extern bool wifi_showInfo;

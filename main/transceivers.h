@@ -99,43 +99,66 @@ public:
     botFreqMHz = freqMHz;
   }
   void scan_range() {
-    // Fast low->high sweep using the currently selected modulation.
-    // Runs with no artificial delay to scan as fast as the radio can tune.
     float low = botFreqMHz;
     float high = topFreqMHz;
-    if (high < low) {
-      float t = low;
-      low = high;
-      high = t;
-    }
+    if (high < low) { float t = low; low = high; high = t; }
 
-    // Step size tuned by modulation (MHz)
     float stepMHz = 0.20f;
-    if (modulation == MOD_OOK || modulation == MOD_ASK) {
-      stepMHz = 0.10f;
-    } else if (modulation == MOD_2FSK || modulation == MOD_GFSK || modulation == MOD_MSK) {
-      stepMHz = 0.20f;
+    if (modulation == MOD_OOK || modulation == MOD_ASK) stepMHz = 0.10f;
+
+    extern bool scanningRadio;
+
+    switch (modulation) {
+      case MOD_OOK: case MOD_ASK: dev->setModulation(2); break;
+      case MOD_2FSK:              dev->setModulation(0); break;
+      case MOD_GFSK:              dev->setModulation(1); break;
+      case MOD_MSK:               dev->setModulation(4); break;
+      default:                    dev->setModulation(0); break;
     }
 
-    extern bool scanningRadio; // from hardware-utils or events
+    // ── Diagnostic header: verify SPI is alive before sweeping ──
+    {
+      byte pn  = dev->SpiReadStatus(0x30); // PARTNUM — should be 0x00
+      byte ver = dev->SpiReadStatus(0x31); // VERSION — 0x14 genuine, varies on clones
+      // Force IDLE then SRX on first step so we can read MARCSTATE
+      dev->SpiStrobe(CC1101_SIDLE);
+      dev->setMHZ(low);
+      dev->SpiStrobe(CC1101_SRX);
+      delayMicroseconds(2000);
+      byte marc = dev->SpiReadStatus(0x35) & 0x1F; // MARCSTATE register
+      byte rssi0 = dev->SpiReadStatus(0x34);
+      int32_t rssi0_dbm = (rssi0 >= 128) ? ((int32_t)rssi0 - 256) / 2 - 74
+                                          : (int32_t)rssi0 / 2 - 74;
+      Serial.printf("[ScanDiag] Module=%d mod=%d PARTNUM=0x%02X VER=0x%02X MARCSTATE=0x%02X rssi_raw=0x%02X (%d dBm) f=%.2f\n",
+                    (int)moduleId, (int)modulation, pn, ver, marc, rssi0, (int)rssi0_dbm, low);
+      if (pn != 0x00 || ver == 0x00 || ver == 0xFF) {
+        Serial.printf("[ScanDiag] *** Module=%d SPI FAIL: bad PARTNUM/VERSION — radio not responding ***\n", (int)moduleId);
+      }
+      if (marc != 0x0D) { // 0x0D = RX state
+        Serial.printf("[ScanDiag] *** Module=%d NOT in RX after SRX strobe (MARCSTATE=0x%02X, expected 0x0D) ***\n",
+                      (int)moduleId, marc);
+      }
+    }
 
-    // Sync CC1101's OOK flag for simple modulations
-    if (modulation == MOD_OOK || modulation == MOD_ASK) {
-      dev->setModulation(2);
-    } 
+    int diagStep = 0; // print raw values for first 5 steps to catch stuck RSSI
+    int sweepCount = 0;
 
     for (float f = low; f <= high && scanningRadio; f += stepMHz) {
-      // IDLE → setMHZ → SRX ensures a clean PLL calibration on every hop.
-      // Calibration takes ~720µs; RSSI register needs ~3ms to settle after that.
       dev->SpiStrobe(CC1101_SIDLE);
       dev->setMHZ(f);
       dev->SpiStrobe(CC1101_SRX);
-      delayMicroseconds(4000); // 4ms: calibration + RSSI settle
+      delayMicroseconds(4000);
 
-      // Read RSSI register directly and convert per CC1101 datasheet §10.3
       byte rssi_raw = dev->SpiReadStatus(0x34);
       int32_t rssi = (rssi_raw >= 128) ? ((int32_t)rssi_raw - 256) / 2 - 74
                                        : (int32_t)rssi_raw / 2 - 74;
+
+      if (diagStep < 5) {
+        Serial.printf("[ScanDiag] Module=%d step=%d f=%.2f rssi_raw=0x%02X rssi=%d\n",
+                      (int)moduleId, diagStep, f, rssi_raw, (int)rssi);
+        diagStep++;
+      }
+      sweepCount++;
 
       uint32_t freq_khz = (uint32_t)(f * 1000.0f);
       uint8_t sample[7];
@@ -150,7 +173,8 @@ public:
       events_enqueue_radio_bytes((int)moduleId, sample, sizeof(sample), f, rssi);
       hw_send_radio_signal_protobuf((int)moduleId, f, rssi, sample, sizeof(sample), "scan_range");
     }
-    dev->SpiStrobe(CC1101_SIDLE); // leave radio idle after sweep
+    Serial.printf("[ScanDiag] Module=%d sweep done %d steps\n", (int)moduleId, sweepCount);
+    dev->SpiStrobe(CC1101_SIDLE);
   }
 };
 
@@ -220,24 +244,46 @@ public:
   void scan_range() {
     float low = botFreqMHz;
     float high = topFreqMHz;
-    if (high < low) {
-      float t = low;
-      low = high;
-      high = t;
-    }
+    if (high < low) { float t = low; low = high; high = t; }
 
     float stepMHz = 0.20f;
-    if (modulation == MOD_OOK || modulation == MOD_ASK) {
-      stepMHz = 0.10f;
-    } else if (modulation == MOD_2FSK || modulation == MOD_GFSK || modulation == MOD_MSK) {
-      stepMHz = 0.20f;
+    if (modulation == MOD_OOK || modulation == MOD_ASK) stepMHz = 0.10f;
+
+    extern bool scanningRadio;
+
+    switch (modulation) {
+      case MOD_OOK: case MOD_ASK: dev->setModulation(2); break;
+      case MOD_2FSK:              dev->setModulation(0); break;
+      case MOD_GFSK:              dev->setModulation(1); break;
+      case MOD_MSK:               dev->setModulation(4); break;
+      default:                    dev->setModulation(0); break;
     }
 
-    extern bool scanningRadio; // from hardware-utils or events
-
-    if (modulation == MOD_OOK || modulation == MOD_ASK) {
-      dev->setModulation(2);
+    // ── Diagnostic header ──
+    {
+      byte pn  = dev->SpiReadStatus(0x30);
+      byte ver = dev->SpiReadStatus(0x31);
+      dev->SpiStrobe(CC1101_SIDLE);
+      dev->setMHZ(low);
+      dev->SpiStrobe(CC1101_SRX);
+      delayMicroseconds(2000);
+      byte marc = dev->SpiReadStatus(0x35) & 0x1F;
+      byte rssi0 = dev->SpiReadStatus(0x34);
+      int32_t rssi0_dbm = (rssi0 >= 128) ? ((int32_t)rssi0 - 256) / 2 - 74
+                                          : (int32_t)rssi0 / 2 - 74;
+      Serial.printf("[ScanDiag] Module=%d mod=%d PARTNUM=0x%02X VER=0x%02X MARCSTATE=0x%02X rssi_raw=0x%02X (%d dBm) f=%.2f\n",
+                    (int)moduleId, (int)modulation, pn, ver, marc, rssi0, (int)rssi0_dbm, low);
+      if (pn != 0x00 || ver == 0x00 || ver == 0xFF) {
+        Serial.printf("[ScanDiag] *** Module=%d SPI FAIL: bad PARTNUM/VERSION ***\n", (int)moduleId);
+      }
+      if (marc != 0x0D) {
+        Serial.printf("[ScanDiag] *** Module=%d NOT in RX after SRX strobe (MARCSTATE=0x%02X) ***\n",
+                      (int)moduleId, marc);
+      }
     }
+
+    int diagStep = 0;
+    int sweepCount = 0;
 
     for (float f = low; f <= high && scanningRadio; f += stepMHz) {
       dev->SpiStrobe(CC1101_SIDLE);
@@ -248,6 +294,13 @@ public:
       byte rssi_raw = dev->SpiReadStatus(0x34);
       int32_t rssi = (rssi_raw >= 128) ? ((int32_t)rssi_raw - 256) / 2 - 74
                                        : (int32_t)rssi_raw / 2 - 74;
+
+      if (diagStep < 5) {
+        Serial.printf("[ScanDiag] Module=%d step=%d f=%.2f rssi_raw=0x%02X rssi=%d\n",
+                      (int)moduleId, diagStep, f, rssi_raw, (int)rssi);
+        diagStep++;
+      }
+      sweepCount++;
 
       uint32_t freq_khz = (uint32_t)(f * 1000.0f);
       uint8_t sample[7];
@@ -262,6 +315,7 @@ public:
       events_enqueue_radio_bytes((int)moduleId, sample, sizeof(sample), f, rssi);
       hw_send_radio_signal_protobuf((int)moduleId, f, rssi, sample, sizeof(sample), "scan_range");
     }
+    Serial.printf("[ScanDiag] Module=%d sweep done %d steps\n", (int)moduleId, sweepCount);
     dev->SpiStrobe(CC1101_SIDLE);
   }
 };

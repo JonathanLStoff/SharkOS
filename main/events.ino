@@ -34,6 +34,12 @@ extern void hw_send_status_protobuf(bool is_scanning,
 extern bool cc1101Connected();
 extern bool cc1101_2Connected();
 
+// BLE emulator (defined in ble-emulator.ino)
+extern String ble_emulate_start(const String &name, const String &serviceUuid,
+                                const String &manufacturerHex, const String &macStr,
+                                bool spoofMac);
+extern String ble_emulate_stop();
+
 // Buffered signal representation used by events enqueueing
 struct BufferedSignal {
   std::vector<uint8_t> payload;
@@ -48,7 +54,7 @@ static std::vector<BufferedSignal> radioBuffers[RADIO_MODULE_COUNT];
 static size_t radioBufferBytes[RADIO_MODULE_COUNT] = {0};
 static size_t radioBufferCount[RADIO_MODULE_COUNT] = {0};
 static unsigned long radioLastReceivedMs[RADIO_MODULE_COUNT] = {0};
-static const int RADIO_SIGNAL_EVENT_COUNT = 250; // flush threshold for event-counted modules (subghz)
+static const int RADIO_SIGNAL_EVENT_COUNT = 50; // flush threshold for event-counted modules (subghz)
 
 // Forward: flush buffer for given module index
 static void events_flush_radio_buffer(int moduleIdx);
@@ -745,10 +751,12 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
     extern float sniffer_top_mhz, sniffer_bot_mhz;
     extern int   sniffer_rssi_threshold;
     extern String sniffer_modulation;
+    extern String sniffer_modulation_two;
     extern bool   sniffer_use_lora;
 
     float topMHz = 433.0f, botMHz = 400.0f;
     String mod = "OOK";
+    String mod2 = "2-FSK";
     int rssiThresh = -80;
 
     if (params) {
@@ -762,6 +770,8 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
         mod = (*params)["modulation"].as<String>();
       if (params->containsKey("modulation_one"))
         mod = (*params)["modulation_one"].as<String>();
+      if (params->containsKey("modulation_two"))
+        mod2 = (*params)["modulation_two"].as<String>();
       if (params->containsKey("rssi_threshold"))
         rssiThresh = (*params)["rssi_threshold"].as<int>();
     }
@@ -773,6 +783,7 @@ static void start_scan_for_key(const String &key, const JsonObject *params = nul
     sniffer_bot_mhz = botMHz;
     sniffer_rssi_threshold = rssiThresh;
     sniffer_modulation = mod;
+    sniffer_modulation_two = mod2;
     sniffer_use_lora = mod.equalsIgnoreCase("LoRa");
 
     Serial.printf("[Sniffer] Starting: %.1f-%.1f MHz mod=%s rssi>=%d lora=%s\n",
@@ -1155,6 +1166,28 @@ static void dispatch_command_key(const String &key, const JsonObject *params = n
   // BLE scanner
   if (key == CMD_BLE_SCAN_START) { start_scan_for_key(String(CMD_BLE_SCAN_START), params); return; }
   if (key == CMD_BLE_SCAN_STOP)  { stop_scan_for_key(String(CMD_BLE_SCAN_STOP)); return; }
+
+  // BLE emulator (advertise/impersonate a target device)
+  if (key == CMD_BLE_EMULATE_START) {
+    String name, serviceUuid, manufacturerHex, mac;
+    bool spoofMac = false;
+    if (params) {
+      if (params->containsKey("name"))         name            = (*params)["name"].as<String>();
+      if (params->containsKey("service_uuid")) serviceUuid     = (*params)["service_uuid"].as<String>();
+      if (params->containsKey("manufacturer")) manufacturerHex = (*params)["manufacturer"].as<String>();
+      if (params->containsKey("mac"))          mac             = (*params)["mac"].as<String>();
+      else if (params->containsKey("address")) mac             = (*params)["address"].as<String>();
+      if (params->containsKey("spoof_mac"))    spoofMac        = (*params)["spoof_mac"].as<bool>();
+    }
+    String resp = ble_emulate_start(name, serviceUuid, manufacturerHex, mac, spoofMac);
+    bluetooth_send_response_internal(resp);
+    return;
+  }
+  if (key == CMD_BLE_EMULATE_STOP) {
+    String resp = ble_emulate_stop();
+    bluetooth_send_response_internal(resp);
+    return;
+  }
 
   // Wi‑Fi scan / sniffer
   if (key == CMD_WIFI_SCAN_START || key == CMD_WIFI_CHANNEL_SCAN) {
@@ -1593,6 +1626,7 @@ void events_process_one() {
           paired = true;
           pairingMode = false;
           prefs.putBool("paired", true);
+          sharkLockTransport(XPORT_BLE); // BLE won — disable WiFi control
           notifyStatus("paired:yes");
           bluetooth_send_response_internal("pair:ok", correlationId);
         } else {
@@ -1615,6 +1649,7 @@ void events_process_one() {
           paired = true;
           pairingMode = false;
           prefs.putBool("paired", true);
+          sharkLockTransport(XPORT_BLE); // BLE won — disable WiFi control
           notifyStatus("paired:yes");
           bluetooth_send_response_internal("pair:ok", correlationId);
         } else {

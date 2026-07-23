@@ -72,10 +72,48 @@ class blescanner_AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
 //   }
 // }
 
-// Stub — BLE scanning disabled to protect the BLE GATT server connection.
-// The full scan code above is preserved for future re-enablement.
+// Active BLE scan.
+//
+// This kicks off a short, non-blocking BLE observer scan. Results are
+// delivered asynchronously through blescanner_AdvertisedDeviceCallbacks::onResult
+// (which appends to the global `blescanner_devices` vector). The caller
+// (events.ino, CMD_BLE_SCAN_START) clears `blescanner_devices` first, calls
+// this, then reads back the collected devices ~5.5s later.
+//
+// IMPORTANT: We intentionally do NOT call BLEDevice::init() here — the BLE
+// stack is already initialised in deviceSetup(). Re-initialising it would
+// destroy the "SharkOS" GATT server and drop the control connection (e.g. the
+// Flipper / Android app that issued the scan command). A passive scan is used
+// so the ESP32's own advertising / active GATT link is disturbed as little as
+// possible.
 void blescanner_scan() {
-  Serial.println("blescanner_scan: DISABLED (BLE GATT priority)");
+  if (!blescanner_pBLEScan) {
+    blescanner_pBLEScan = BLEDevice::getScan();
+    blescanner_pBLEScan->setAdvertisedDeviceCallbacks(
+        new blescanner_AdvertisedDeviceCallbacks(), /*wantDuplicates=*/false);
+  }
+
+  // Passive scan: listen only, never send scan-request packets. This keeps
+  // the radio mostly in RX and coexists better with the active GATT link.
+  blescanner_pBLEScan->setActiveScan(false);
+  blescanner_pBLEScan->setInterval(100);
+  blescanner_pBLEScan->setWindow(80);
+
+  Serial.println("blescanner_scan: starting 5s passive scan");
+  // Async form: returns immediately, fires the completion callback after 5s.
+  // onResult populates blescanner_devices as adverts arrive.
+  bool ok = blescanner_pBLEScan->start(
+      5,
+      [](BLEScanResults results) {
+        Serial.printf("blescanner_scan: complete, %d device(s)\n", results.getCount());
+        // Free the BLEScan-internal result list (our findings are already
+        // stored in blescanner_devices via onResult).
+        if (blescanner_pBLEScan) blescanner_pBLEScan->clearResults();
+      },
+      false);
+  if (!ok) {
+    Serial.println("blescanner_scan: start() failed");
+  }
 }
 
 

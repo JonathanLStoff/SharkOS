@@ -362,9 +362,9 @@ function setChartRange(kind: 'channels' | 'signal', min: number | null, max: num
     // Adjust tick step: for frequency ranges >20, use 5 MHz steps
     const range = (max ?? 0) - (min ?? 0);
     xScale.ticks.stepSize = range > 20 ? 5 : 1;
-    // Adjust bar width for dense frequency sweeps
-    const ds = channelsChart.data.datasets[0] as any;
-    if (ds) {
+    // Adjust bar width for dense frequency sweeps — apply to all datasets
+    for (const ds of channelsChart.data.datasets as any[]) {
+      if (!ds) continue;
       if (range > 50) {
         ds.barPercentage = 0.4;
         ds.barThickness = 3;
@@ -463,18 +463,29 @@ function createChannelsChart() {
     // Let Chart.js responsive mode size the canvas to its container
     const chart = new Chart(c.getContext('2d') as CanvasRenderingContext2D, {
       type: 'bar',
-      data: { 
-        datasets: [{
-          label: 'Signal',
-          data: [], // objects { x: channel/freq, y: rssi, ssid: 'name', module?:number }
-          // per-bar colors will be populated dynamically when signals arrive
-          backgroundColor: [] as any[],
-          borderWidth: 0,
-          barThickness: 18,
-          maxBarThickness: 24,
-          barPercentage: 0.8,
-          categoryPercentage: 1.0
-        }]
+      data: {
+        datasets: [
+          {
+            label: 'Radio 1 (CC1101_1)',
+            data: [], // module 0: CC1101_1 — purple bars
+            backgroundColor: [] as any[],
+            borderWidth: 0,
+            barThickness: 18,
+            maxBarThickness: 24,
+            barPercentage: 0.8,
+            categoryPercentage: 1.0
+          },
+          {
+            label: 'Radio 2 (CC1101_2)',
+            data: [], // module 1: CC1101_2 — red bars
+            backgroundColor: [] as any[],
+            borderWidth: 0,
+            barThickness: 18,
+            maxBarThickness: 24,
+            barPercentage: 0.8,
+            categoryPercentage: 1.0
+          }
+        ]
       },
       options: {
         animation: false,
@@ -509,7 +520,10 @@ function createChannelsChart() {
           }
         },
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: true,
+            labels: { color: '#d6daf5', font: { size: 11 } }
+          },
           tooltip: {
             callbacks: {
               label: (ctx: any) => {
@@ -572,15 +586,19 @@ function attachZoomHandlers(container: HTMLElement | null) {
 function configureChannelsChartForAction(action: string | null) {
   if (!channelsChart) return;
   const xScale = (channelsChart as any).options.scales.x;
-  const ds = channelsChart.data.datasets[0] as any;
-  if (action?.startsWith('sub-ghz')) {
+  const isSubGhz = action?.startsWith('sub-ghz');
+  if (isSubGhz) {
     xScale.title.text = 'Frequency (MHz)';
     xScale.ticks.stepSize = 1;
+    // Show legend only in sub-ghz mode so users can distinguish CC1101_1 vs CC1101_2
+    (channelsChart as any).options.plugins.legend.display = true;
   } else {
-    // WiFi channel mode — ensure bars are wide enough to see
+    // WiFi/BLE channel mode — fat bars, no legend
     xScale.title.text = 'Channel';
     xScale.ticks.stepSize = 1;
-    if (ds) {
+    (channelsChart as any).options.plugins.legend.display = false;
+    for (const ds of channelsChart.data.datasets as any[]) {
+      if (!ds) continue;
       ds.barPercentage = 0.9;
       ds.barThickness = 18;
       ds.maxBarThickness = 24;
@@ -623,10 +641,17 @@ function showChart(kind: string) {
   // Reconfigure axes for the active action
   if (kind === 'channels') configureChannelsChartForAction(currentAction);
 
+  const isSniffer = currentAction === 'sub-ghz-recorder';
+  const isPlayback = currentAction === 'sub-ghz-playback';
+
+  // Middle panel: packet log table — only visible in sniffer mode
+  const midPanel = document.getElementById('sniffer-mid-panel') as HTMLElement | null;
+  if (midPanel) midPanel.style.display = isSniffer ? 'flex' : 'none';
+
   // Hide log panel for channel scan to maximize space
   const logPanel = document.querySelector('.log-panel') as HTMLElement | null;
   if (logPanel) {
-    const hideLog = (currentAction === 'wifi-channel-scan' || (currentAction?.startsWith('sub-ghz') && currentAction !== 'sub-ghz-recorder' && currentAction !== 'sub-ghz-playback') || kind === 'channels');
+    const hideLog = (currentAction === 'wifi-channel-scan' || (currentAction?.startsWith('sub-ghz') && !isSniffer && !isPlayback) || kind === 'channels');
     logPanel.style.display = hideLog ? 'none' : '';
     const mainPanel = document.querySelector('.chart-main') as HTMLElement | null;
     if (mainPanel) {
@@ -634,12 +659,12 @@ function showChart(kind: string) {
     }
     // show recorder controls only when recorder action
     const recControls = document.getElementById('recorder-controls');
-    if (recControls) recControls.style.display = (currentAction === 'sub-ghz-recorder') ? 'flex' : 'none';
+    if (recControls) recControls.style.display = isSniffer ? 'flex' : 'none';
     // show playback controls only when playback action
     const playbackControls = document.getElementById('playback-controls');
-    if (playbackControls) playbackControls.style.display = (currentAction === 'sub-ghz-playback') ? 'flex' : 'none';
+    if (playbackControls) playbackControls.style.display = isPlayback ? 'flex' : 'none';
     const cellOutput = document.getElementById('cell-scan-output');
-    if (cellOutput) cellOutput.style.display = (currentAction === 'sub-ghz-recorder' || currentAction === 'sub-ghz-playback') ? 'none' : '';
+    if (cellOutput) cellOutput.style.display = (isSniffer || isPlayback) ? 'none' : '';
   }
 
   if (signalPanel) {
@@ -735,6 +760,8 @@ let recorderTotalCount = 0;
 let recorderFilteredCount = 0;
 let recorderStorageBytes = 0;
 let recorderLastThreshold = Number.NaN;
+let recorderHideEmptyPackets = true;
+let recorderLastHideEmpty = true;
 let recorderQueryGeneration = 0;
 let recorderPendingEntries: SnifferSessionPacketInput[] = [];
 let recorderFlushTimer: number | null = null;
@@ -1015,6 +1042,7 @@ function renderRecorderViewport() {
   const container = getRecorderScrollContainer();
   if (!tbody || !container) return;
 
+  const savedScrollTop = container.scrollTop;
   tbody.innerHTML = '';
   updateRecorderCountLabel();
 
@@ -1103,9 +1131,11 @@ function renderRecorderViewport() {
   if (endIndex < recorderFilteredCount) {
     tbody.appendChild(createRecorderSpacerRow((recorderFilteredCount - endIndex) * RECORDER_ROW_HEIGHT));
   }
+
+  container.scrollTop = savedScrollTop;
 }
 
-async function loadRecorderPage(pageIndex: number, minRssi: number, generation: number) {
+async function loadRecorderPage(pageIndex: number, minRssi: number, minLen: number, generation: number) {
   const requestKey = `${generation}:${pageIndex}`;
   if (pageIndex < 0 || recorderPagesInFlight.has(requestKey)) return;
   recorderPagesInFlight.add(requestKey);
@@ -1114,6 +1144,7 @@ async function loadRecorderPage(pageIndex: number, minRssi: number, generation: 
       offset: pageIndex * RECORDER_PAGE_SIZE,
       limit: RECORDER_PAGE_SIZE,
       minRssi,
+      minLen,
     });
     if (generation !== recorderQueryGeneration || minRssi !== recorderLastThreshold) {
       return;
@@ -1123,6 +1154,7 @@ async function loadRecorderPage(pageIndex: number, minRssi: number, generation: 
     recorderTotalCount = page.total_count;
     recorderFilteredCount = page.filtered_count;
     recorderStorageBytes = page.storage_bytes;
+    queueRecorderViewportRefresh();
   } catch (err) {
     error(`[sniffer] page load failed: ${String(err)}`);
     appendLog(`[sniffer] Failed to load packet page: ${String(err)}`);
@@ -1136,8 +1168,11 @@ async function ensureRecorderPagesForViewport() {
   if (!container) return;
 
   const minRssi = getRecorderThreshold();
-  if (recorderLastThreshold !== minRssi) {
+  const minLen = recorderHideEmptyPackets ? 1 : 0;
+  const filterChanged = recorderLastThreshold !== minRssi || recorderLastHideEmpty !== recorderHideEmptyPackets;
+  if (filterChanged) {
     recorderLastThreshold = minRssi;
+    recorderLastHideEmpty = recorderHideEmptyPackets;
     recorderQueryGeneration += 1;
     clearRecorderPageCache();
     recorderFilteredCount = 0;
@@ -1157,7 +1192,7 @@ async function ensureRecorderPagesForViewport() {
 
   for (let pageIndex = firstPage; pageIndex <= lastPage; pageIndex++) {
     if (!recorderPageCache.has(pageIndex)) {
-      loads.push(loadRecorderPage(pageIndex, minRssi, generation));
+      loads.push(loadRecorderPage(pageIndex, minRssi, minLen, generation));
     } else {
       touchRecorderPage(pageIndex);
     }
@@ -1166,7 +1201,7 @@ async function ensureRecorderPagesForViewport() {
   if (loads.length > 0) {
     await Promise.all(loads);
   } else if (recorderPageCache.size === 0) {
-    await loadRecorderPage(0, minRssi, generation);
+    await loadRecorderPage(0, minRssi, minLen, generation);
   }
 }
 
@@ -1347,6 +1382,7 @@ async function saveRecorderCsv() {
     if (!filePath) return;
 
     const minRssi = getRecorderThreshold();
+    const minLen = recorderHideEmptyPackets ? 1 : 0;
     const rows: SnifferSessionRecord[] = [];
 
     for (let offset = 0; ; offset += RECORDER_SAVE_PAGE_SIZE) {
@@ -1354,6 +1390,7 @@ async function saveRecorderCsv() {
         offset,
         limit: RECORDER_SAVE_PAGE_SIZE,
         minRssi,
+        minLen,
       });
       if (page.rows.length === 0) {
         recorderTotalCount = page.total_count;
@@ -1391,6 +1428,7 @@ async function saveAllToDb() {
         offset,
         limit: RECORDER_SAVE_PAGE_SIZE,
         minRssi: -200,
+        minLen: 0,
       });
       page.rows.forEach(rec => db.push(toSavedSnifferRecord(rec)));
     }
@@ -1553,17 +1591,19 @@ function setPlaying(val: boolean) {
         if (isPlaying) {
           const sniffFreqLow = parseFloat((document.getElementById('sniffer-freq-low') as HTMLInputElement)?.value || '400');
           const sniffFreqHigh = parseFloat((document.getElementById('sniffer-freq-high') as HTMLInputElement)?.value || '433');
-          const sniffMod = (document.getElementById('sniffer-mod') as HTMLSelectElement)?.value || 'OOK';
+          const sniffMod1 = (document.getElementById('sniffer-mod') as HTMLSelectElement)?.value || 'OOK';
+          const sniffMod2 = (document.getElementById('sniffer-mod-two') as HTMLSelectElement)?.value || '2-FSK';
           const sniffThresh = getRecorderThreshold();
           const sniffParams = {
             top_frequency_mhz: Math.max(sniffFreqLow, sniffFreqHigh),
             bottom_frequency_mhz: Math.min(sniffFreqLow, sniffFreqHigh),
-            modulation: sniffMod,
-            modulation_one: sniffMod,
+            modulation: sniffMod1,
+            modulation_one: sniffMod1,
+            modulation_two: sniffMod2,
             rssi_threshold: sniffThresh
           };
           await invoke<string>('run_action', { action: 'subghz.record.start', macaddy, params: JSON.stringify(sniffParams) });
-          appendLog(`[sniffer] start -> ${sniffParams.bottom_frequency_mhz}-${sniffParams.top_frequency_mhz}MHz mod=${sniffMod} rssi>=${sniffThresh}`);
+          appendLog(`[sniffer] start -> ${sniffParams.bottom_frequency_mhz}-${sniffParams.top_frequency_mhz}MHz mod1=${sniffMod1} mod2=${sniffMod2} rssi>=${sniffThresh}`);
         } else {
           await invoke<string>('run_action', { action: 'sub-ghz-recorder-stop', macaddy, params: JSON.stringify({}) });
           await flushRecorderEntries();
@@ -1739,12 +1779,11 @@ async function logSignalToExternal(signalType: string, signalData: Record<string
   const now = Date.now();
   if (now - (_extLogLastMs[signalType] ?? 0) < EXT_LOG_THROTTLE_MS) return;
   _extLogLastMs[signalType] = now;
-  try {
-    await invoke('log_signal_external', {
-      signalType,
-      signalJson: JSON.stringify(signalData),
-    });
-  } catch { /* non-critical – silent drop */ }
+  // Fire-and-forget — never block the UI for external logging
+  invoke('log_signal_external', {
+    signalType,
+    signalJson: JSON.stringify(signalData),
+  }).catch(() => {});
 }
 
 // Populate the settings form fields from localStorage
@@ -1862,14 +1901,17 @@ async function setup() {
     }
   }, 10000);
 
-  // orient app to landscape (either primary or secondary).
+  // Lock to landscape (both directions). Try 'landscape' first, fall back to
+  // locking each direction individually for older WebView versions.
   const screenOrientation = screen.orientation as ScreenOrientation & {
-    lock?: (orientation: 'any' | 'natural' | 'landscape' | 'portrait' | 'portrait-primary' | 'portrait-secondary' | 'landscape-primary' | 'landscape-secondary') => Promise<void>;
+    lock?: (o: string) => Promise<void>;
   };
   if (screenOrientation?.lock) {
-    screenOrientation.lock('landscape').catch((e: unknown) => {
-      info('orientation lock failed: ' + String(e));
-    });
+    screenOrientation.lock('landscape').catch(() =>
+      screenOrientation.lock!('landscape-primary').catch(() =>
+        screenOrientation.lock!('landscape-secondary').catch(() => {})
+      )
+    );
   }
   // ensure we have file read/write permissions on Android before using storage
   async function ensureFilePermissions(): Promise<boolean> {
@@ -1945,6 +1987,83 @@ async function setup() {
     });
   });
   info('setup: main menu buttons wired');
+
+  // ── Main menu pagination ──────────────────────────────────────────────
+  // Shows MENU_PER_PAGE buttons at a time in the #main-menu grid.
+  // Supports tap (prev/next buttons), dot navigation, and horizontal swipe.
+  {
+    const MENU_PER_PAGE = 8;
+    let menuPage = 0;
+
+    const menuEl   = document.getElementById('main-menu');
+    const prevBtn  = document.getElementById('menuPrevBtn')   as HTMLButtonElement | null;
+    const nextBtn  = document.getElementById('menuNextBtn')   as HTMLButtonElement | null;
+    const pageLabel= document.getElementById('menu-page-label');
+    const dotsEl   = document.getElementById('menu-dots');
+
+    // Collect all menu buttons inside #main-menu only (not submenus)
+    const menuBtns: HTMLElement[] = menuEl
+      ? Array.from(menuEl.querySelectorAll<HTMLElement>('.menu-btn'))
+      : [];
+
+    const totalPages = Math.max(1, Math.ceil(menuBtns.length / MENU_PER_PAGE));
+
+    // Build dot buttons
+    if (dotsEl) {
+      for (let i = 0; i < totalPages; i++) {
+        const dot = document.createElement('button');
+        dot.className = 'menu-dot' + (i === 0 ? ' active' : '');
+        dot.setAttribute('aria-label', `Page ${i + 1}`);
+        dot.addEventListener('click', () => gotoMenuPage(i));
+        dotsEl.appendChild(dot);
+      }
+    }
+
+    function gotoMenuPage(p: number) {
+      menuPage = Math.max(0, Math.min(p, totalPages - 1));
+
+      // Show only the buttons belonging to the current page
+      menuBtns.forEach((btn, idx) => {
+        btn.style.display = Math.floor(idx / MENU_PER_PAGE) === menuPage ? '' : 'none';
+      });
+
+      if (prevBtn)   prevBtn.disabled  = menuPage === 0;
+      if (nextBtn)   nextBtn.disabled  = menuPage === totalPages - 1;
+      if (pageLabel) pageLabel.textContent = `${menuPage + 1}/${totalPages}`;
+
+      // Sync dot highlight
+      if (dotsEl) {
+        Array.from(dotsEl.children).forEach((dot, i) => {
+          dot.classList.toggle('active', i === menuPage);
+        });
+      }
+    }
+
+    if (prevBtn) prevBtn.addEventListener('click', () => gotoMenuPage(menuPage - 1));
+    if (nextBtn) nextBtn.addEventListener('click', () => gotoMenuPage(menuPage + 1));
+
+    // Swipe gesture on the menu grid (passive so scrolling isn't blocked)
+    if (menuEl) {
+      let swipeStartX = 0;
+      let swipeStartY = 0;
+      menuEl.addEventListener('touchstart', (e: TouchEvent) => {
+        swipeStartX = e.touches[0].clientX;
+        swipeStartY = e.touches[0].clientY;
+      }, { passive: true });
+      menuEl.addEventListener('touchend', (e: TouchEvent) => {
+        const dx = e.changedTouches[0].clientX - swipeStartX;
+        const dy = e.changedTouches[0].clientY - swipeStartY;
+        // Only register as horizontal swipe if dx is dominant and >50px
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          gotoMenuPage(menuPage + (dx < 0 ? 1 : -1));
+        }
+      }, { passive: true });
+    }
+
+    // Initial render
+    gotoMenuPage(0);
+    info(`setup: menu pagination ready (${menuBtns.length} items, ${totalPages} pages)`);
+  }
 
   // Wire the System Info button to send a one-shot status command over
   // Bluetooth (no navigation or UI changes).
@@ -2233,7 +2352,7 @@ async function setup() {
   const dialSvg     = document.getElementById('rotaryDial')    as SVGElement | null;
   const dialIndicator = document.getElementById('dialIndicator') as SVGElement | null;
   const DIAL_STEP = 1.0; // MHz per notch
-  const DIAL_DEG_PER_STEP = 60; // degrees of rotation per 1 MHz step (less sensitive)
+  const DIAL_DEG_PER_STEP = 20; // degrees per MHz step — 3× more responsive than before
   let dialAngle = 0;      // absolute cumulative angle (volume-knob, never resets)
   let dialAccum = 0;      // sub-step accumulator in degrees
   let dialDragging = false;
@@ -2277,7 +2396,7 @@ async function setup() {
     if (!dialDragging) return;
     const dy = dialLastY - ev.clientY; // positive = drag up = increase freq
     dialLastY = ev.clientY;
-    const delta = dy * 0.6; // 0.6° per pixel (much less sensitive than old 2°/px)
+    const delta = dy * 1.5; // 1.5° per pixel — responsive for touch
     dialAngle += delta;
     dialAccum += delta;
     updateDialVisual();
@@ -2391,8 +2510,14 @@ async function setup() {
   // Wire play/stop header buttons to toggle playing state
   const playBtn = document.getElementById('playBtn') as HTMLButtonElement | null;
   const stopBtn = document.getElementById('stopBtn') as HTMLButtonElement | null;
-  playBtn?.addEventListener('click', () => { setPlaying(true); });
-  stopBtn?.addEventListener('click', () => { setPlaying(false); });
+  playBtn?.addEventListener('click', () => {
+    if (playBtn) { playBtn.disabled = true; setTimeout(() => { playBtn.disabled = false; }, 1500); }
+    setPlaying(true);
+  });
+  stopBtn?.addEventListener('click', () => {
+    if (stopBtn) { stopBtn.disabled = true; setTimeout(() => { stopBtn.disabled = false; }, 1500); }
+    setPlaying(false);
+  });
 
   window.onpopstate = (ev) => {
     const state = ev.state as any;
@@ -2656,7 +2781,11 @@ function getBleChannel(freq: number): number | null {
       // For channel analysis we push scatter points with X=Channel, Y=strength/count
       if (channelsChart && typeof s.frequency_mhz === 'number' && s.frequency_mhz > 0) {
         try {
-          const ds = channelsChart.data.datasets[0];
+          // Sub-GHz: route CC1101_1 (module 0) to dataset 0 (purple) and CC1101_2 (module 1)
+          // to dataset 1 (red) so both radios are independently visible on the spectrum chart.
+          // Other modes (WiFi, BLE) always use dataset 0.
+          const dsIdx = (currentAction === 'sub-ghz-scanner' && s.module === 1) ? 1 : 0;
+          const ds = channelsChart.data.datasets[dsIdx];
           if (!ds) return;
 
           // Determine mode based on active action to decide how to process
@@ -3207,6 +3336,10 @@ function getBleChannel(freq: number): number | null {
     syncRecorderThresholdInput();
     queueRecorderViewportRefresh();
   });
+  document.getElementById('recorder-hide-empty')?.addEventListener('change', (e) => {
+    recorderHideEmptyPackets = (e.target as HTMLInputElement).checked;
+    queueRecorderViewportRefresh();
+  });
   document.getElementById('recorder-clear')?.addEventListener('click', () => {
     void clearRecorderSession();
   });
@@ -3230,25 +3363,22 @@ function getBleChannel(freq: number): number | null {
   }, { passive: true });
 
   // Sniffer modulation auto-adjust frequencies
-  document.getElementById('sniffer-mod')?.addEventListener('change', (e) => {
-    const mod = (e.target as HTMLSelectElement).value;
+  const handleSnifferModChange = (mod: string) => {
     const loEl = document.getElementById('sniffer-freq-low') as HTMLInputElement;
     const hiEl = document.getElementById('sniffer-freq-high') as HTMLInputElement;
-    const threshEl = document.getElementById('recorder-thresh') as HTMLInputElement | null;
     if (mod === 'LoRa') {
       if (loEl) loEl.value = '900';
       if (hiEl) hiEl.value = '933';
-      if (threshEl) {
-        const current = parseInt(threshEl.value, 10);
-        if (Number.isNaN(current) || current > -95) {
-          threshEl.value = '-100';
-          queueRecorderViewportRefresh();
-        }
-      }
     } else {
       if (loEl && parseFloat(loEl.value) >= 900) loEl.value = '400';
       if (hiEl && parseFloat(hiEl.value) >= 900) hiEl.value = '433';
     }
+  };
+  document.getElementById('sniffer-mod')?.addEventListener('change', (e) => {
+    handleSnifferModChange((e.target as HTMLSelectElement).value);
+  });
+  document.getElementById('sniffer-mod-two')?.addEventListener('change', (e) => {
+    handleSnifferModChange((e.target as HTMLSelectElement).value);
   });
 
   // Delegate click for per-row "+DB" buttons in recorder table

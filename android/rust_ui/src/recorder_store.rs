@@ -120,21 +120,21 @@ impl RecorderStore {
         Ok(())
     }
 
-    fn page(&self, offset: i64, limit: i64, min_rssi: i64) -> Result<SnifferPage, String> {
+    fn page(&self, offset: i64, limit: i64, min_rssi: i64, min_len: i64) -> Result<SnifferPage, String> {
         let total_count = self.count_all()?;
-        let filtered_count = self.count_filtered(min_rssi)?;
+        let filtered_count = self.count_filtered(min_rssi, min_len)?;
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, timestamp_ms, freq, mod_name, rssi, len, data, module
                  FROM sniffer_packets
-                 WHERE rssi >= ?1
+                 WHERE rssi >= ?1 AND len >= ?2
                  ORDER BY id ASC
-                 LIMIT ?2 OFFSET ?3",
+                 LIMIT ?3 OFFSET ?4",
             )
             .map_err(|e| format!("prepare page query: {e}"))?;
         let rows = stmt
-            .query_map(params![min_rssi, limit, offset], |row| {
+            .query_map(params![min_rssi, min_len, limit, offset], |row| {
                 Ok(SnifferRecord {
                     id: row.get(0)?,
                     timestamp_ms: row.get(1)?,
@@ -185,7 +185,7 @@ impl RecorderStore {
         }
     }
 
-    fn export_csv(&self, path: &str, min_rssi: i64) -> Result<SnifferSessionStats, String> {
+    fn export_csv(&self, path: &str, min_rssi: i64, min_len: i64) -> Result<SnifferSessionStats, String> {
         let mut writer = csv::Writer::from_path(path).map_err(|e| format!("open csv writer: {e}"))?;
         writer
             .write_record([
@@ -203,11 +203,11 @@ impl RecorderStore {
             .prepare(
                 "SELECT timestamp_ms, freq, mod_name, rssi, len, data
                  FROM sniffer_packets
-                 WHERE rssi >= ?1
+                 WHERE rssi >= ?1 AND len >= ?2
                  ORDER BY id ASC",
             )
             .map_err(|e| format!("prepare csv query: {e}"))?;
-        let mut rows = stmt.query(params![min_rssi]).map_err(|e| format!("query csv rows: {e}"))?;
+        let mut rows = stmt.query(params![min_rssi, min_len]).map_err(|e| format!("query csv rows: {e}"))?;
         while let Some(row) = rows.next().map_err(|e| format!("iterate csv rows: {e}"))? {
             writer
                 .write_record([
@@ -237,11 +237,11 @@ impl RecorderStore {
             .map_err(|e| format!("count all rows: {e}"))
     }
 
-    fn count_filtered(&self, min_rssi: i64) -> Result<i64, String> {
+    fn count_filtered(&self, min_rssi: i64, min_len: i64) -> Result<i64, String> {
         self.conn
             .query_row(
-                "SELECT COUNT(*) FROM sniffer_packets WHERE rssi >= ?1",
-                params![min_rssi],
+                "SELECT COUNT(*) FROM sniffer_packets WHERE rssi >= ?1 AND len >= ?2",
+                params![min_rssi, min_len],
                 |row| row.get(0),
             )
             .map_err(|e| format!("count filtered rows: {e}"))
@@ -302,16 +302,16 @@ pub fn clear_packets() -> Result<(), String> {
     with_store(|store| store.clear())
 }
 
-pub fn page_packets(offset: i64, limit: i64, min_rssi: i64) -> Result<SnifferPage, String> {
-    with_store(|store| store.page(offset.max(0), limit.max(1), min_rssi))
+pub fn page_packets(offset: i64, limit: i64, min_rssi: i64, min_len: i64) -> Result<SnifferPage, String> {
+    with_store(|store| store.page(offset.max(0), limit.max(1), min_rssi, min_len))
 }
 
 pub fn get_packet(id: i64) -> Result<Option<SnifferRecord>, String> {
     with_store(|store| store.get_record(id))
 }
 
-pub fn export_packets_csv(path: &str, min_rssi: i64) -> Result<SnifferSessionStats, String> {
-    with_store(|store| store.export_csv(path, min_rssi))
+pub fn export_packets_csv(path: &str, min_rssi: i64, min_len: i64) -> Result<SnifferSessionStats, String> {
+    with_store(|store| store.export_csv(path, min_rssi, min_len))
 }
 
 pub fn session_stats() -> Result<SnifferSessionStats, String> {

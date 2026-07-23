@@ -492,6 +492,12 @@ void runWifiBleScanTasks() {
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
+    // If WiFi already won the transport lock, refuse BLE connections.
+    if (g_activeTransport == XPORT_WIFI) {
+      Serial.println("BLE connect refused — WiFi transport is active");
+      if (pServer) pServer->disconnect(pServer->getConnId());
+      return;
+    }
     anyConnected = true;
     Serial.println("BLE client connected");
     // If already paired, exit pairing mode immediately so LED updates.
@@ -504,9 +510,11 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer* pServer) {
     anyConnected = false;
     Serial.println("BLE client disconnected");
-    // Restart advertising so new clients can discover and connect
-    BLEDevice::startAdvertising();
-    Serial.println("BLE advertising restarted");
+    // Only re-advertise if WiFi hasn't taken over the device.
+    if (g_activeTransport != XPORT_WIFI) {
+      BLEDevice::startAdvertising();
+      Serial.println("BLE advertising restarted");
+    }
   }
 };
 
@@ -683,48 +691,33 @@ void deviceSetup() {
   Serial.println("deviceSetup: starting SPI buses (deferred to radio libs)");
   delay(10); // yield to WDT
 
-  // Init CC1101 #1
-  // MUST set SPI pins and GDO BEFORE Init() — otherwise Init() uses
-  // default ESP32 pins (18/19/23/5), hangs on Reset() waiting for MISO.
-  Serial.println("deviceSetup: initializing CC1101 #1");
-  cc1101_driver_1.setSpiPin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, CC1101_1_CS);
-  cc1101_driver_1.setGDO(CC1101_1_GDO0, CC1101_1_GDO2);
-  cc1101_driver_1.Init();
-  cc1101_driver_1.setCCMode(true);
-  cc1101_driver_1.setGDO0(CC1101_1_GDO0);
-  cc1101_driver_1.setMHZ(433.92);
-  {
-    byte pn = cc1101_driver_1.SpiReadStatus(0x30);  // PARTNUM — always 0x00 for CC1101
-    byte ver = cc1101_driver_1.SpiReadStatus(0x31); // VERSION — 0x14 genuine, varies on clones
-    radioOk_cc1101_1 = (pn == 0x00 && ver != 0x00 && ver != 0xFF);
-    Serial.printf("CC1101 #1 PARTNUM=0x%02X VERSION=0x%02X %s\n", pn, ver, radioOk_cc1101_1 ? "OK" : "FAIL");
-  }
-  delay(10); // yield to WDT
-
-  // NFC init — PN532 in SPI mode on shared FSPI bus (SCK=12 MISO=13 MOSI=11 CS=10).
-  // Deassert all other CS pins on the bus before touching PN532.
+  // ── NFC first ──────────────────────────────────────────────────────────────
+  // Init NFC (PN532) BEFORE CC1101 #1 so that nfc.begin()'s SPI.begin() call
+  // cannot corrupt the CC1101 bus. After NFC init we restore the FSPI pins and
+  // CC1101 #1 gets a single, clean initialisation on a known-good bus.
   deactivateNRF1();
   deactivateCC1101();
   delay(10);
 
-  Serial.printf("deviceSetup: NFC init (SPI CS=GPIO%d RST=GPIO%d)\n",
+  Serial.printf("deviceSetup: NFC init first (SPI CS=GPIO%d RST=GPIO%d)\n",
                 PN532SS_PIN, PN532_RESET);
 
-  // Hardware reset — the Adafruit SPI constructor has no reset pin, so toggle manually.
+  // Hardware reset
   pinMode(PN532_RESET, OUTPUT);
   digitalWrite(PN532_RESET, HIGH);
   delay(10);
   digitalWrite(PN532_RESET, LOW);
   delay(20);
   digitalWrite(PN532_RESET, HIGH);
-  delay(100); // PN532 needs ~100ms after RSTPD de-asserted
+  delay(100);
 
-  // nfc.begin() internally calls SPI.begin() with no args, which resets FSPI to
-  // ESP32-S3 defaults. Restore the correct FSPI pins immediately after.
+  // nfc.begin() may call SPI.begin() with default pins — fully reset the bus
+  // afterwards so CC1101 #1 gets clean FSPI with its own pins.
   nfc.begin();
   SPI.end();
-  SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, -1);
-  delay(50); // give PN532 time to settle on the restored bus
+  delay(5);
+  SPI.begin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, CC1101_1_CS);
+  delay(10);
 
   uint32_t nfcVersion = 0;
   for (int attempt = 0; attempt < 4 && nfcVersion == 0; attempt++) {
@@ -734,16 +727,107 @@ void deviceSetup() {
       delay(150);
     }
   }
-
   radioOk_nfc = (nfcVersion != 0);
   if (nfcVersion) {
     Serial.printf("PN532 found FW=0x%08X\n", nfcVersion);
     nfc.SAMConfig();
   } else {
-    Serial.printf("PN532 not found — verify SPI wiring: SCK=GPIO%d MISO=GPIO%d MOSI=GPIO%d CS=GPIO%d RST=GPIO%d\n",
+    Serial.printf("PN532 not found — SCK=GPIO%d MISO=GPIO%d MOSI=GPIO%d CS=GPIO%d RST=GPIO%d\n",
                   CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, PN532SS_PIN, PN532_RESET);
   }
   delay(10);
+
+  // ── CC1101 #1 — init WITHOUT calling Init() ─────────────────────────────
+  // The ELECHOUSE Init() → Reset() function has an unconditional
+  //   while(digitalRead(MISO_PIN));
+  // busy-loop with NO timeout. If MISO is stuck HIGH (SPI peripheral holds
+  // the pin HIGH when idle, or chip not present) the ESP32 hangs forever.
+  //
+  // Fix: use SpiStrobe(CC1101_SRES) which sends 0x30 over SPI without any
+  // MISO polling. The chip resets in ~300 µs; we wait 10 ms for margin.
+  // A manual MISO check with a 200 ms timeout runs first for diagnostics.
+  Serial.println("deviceSetup: initializing CC1101 #1");
+  {
+    bool initOk = false;
+    for (int attempt = 1; attempt <= 3 && !initOk; attempt++) {
+      // Make sure no SPI peripheral owns these pins yet — the MISO diagnostic
+      // below must bit-bang the pin as plain GPIO before anything attaches
+      // the GPIO matrix routing to it. resetSpiInit() forces the driver's own
+      // SpiStart() (invoked lazily by SpiStrobe below) to redo _spiBus->begin()
+      // instead of assuming a still-live bus from a previous attempt.
+      SPI.end();
+      cc1101_driver_1.resetSpiInit();
+      delay(5 * attempt);
+
+      // ── Manual MISO diagnostic (read as plain GPIO before SPI claims the pin) ──
+      // Briefly configure MISO as a pulldown input so we can digitalRead() it.
+      pinMode(CC1101_1_CS,   OUTPUT);
+      pinMode(CC1101_1_MISO, INPUT_PULLDOWN);
+      digitalWrite(CC1101_1_CS, HIGH);
+      delayMicroseconds(100);
+
+      // CS LOW → chip should pull MISO low when it's ready (chip-select acknowledge)
+      digitalWrite(CC1101_1_CS, LOW);
+      unsigned long tw = millis();
+      while (digitalRead(CC1101_1_MISO) && (millis() - tw < 200)) delayMicroseconds(10);
+      bool chipReady = !digitalRead(CC1101_1_MISO);
+      Serial.printf("[CC1101_1 #%d] MISO after CS assert: %s (waited %lums)\n",
+                    attempt, chipReady ? "LOW=chip present" : "HIGH=stuck/absent", millis() - tw);
+      digitalWrite(CC1101_1_CS, HIGH);
+      pinMode(CC1101_1_MISO, INPUT);
+      delayMicroseconds(50);
+
+      // ── Send SRES without blocking MISO poll ────────────────────────────
+      // setSpiPin / setGDO store pin numbers for later SPI calls. Do NOT call
+      // SPI.begin() here ourselves — SpiStrobe() below triggers the driver's
+      // own SpiStart(), which is the single authoritative _spiBus->begin()
+      // call (with ss=-1, so CS stays under our manual digitalWrite() control
+      // instead of the hardware auto-CS). Calling SPI.begin() a second time
+      // here would make SpiStart()'s first-run pinMode() calls detach the
+      // GPIO matrix routing right after it's attached, crashing the ESP32 on
+      // the very next _spiBus->transfer().
+      cc1101_driver_1.setSpiPin(CC1101_1_SCK, CC1101_1_MISO, CC1101_1_MOSI, CC1101_1_CS);
+      cc1101_driver_1.setGDO(CC1101_1_GDO0, CC1101_1_GDO2);
+      cc1101_driver_1.SpiStrobe(CC1101_SRES); // reset chip, no MISO wait
+      delay(10);   // CC1101 needs ~300 µs; 10 ms is ample margin
+
+      // Configure chip (these write SPI registers — safe after SRES)
+      cc1101_driver_1.setCCMode(true);
+      cc1101_driver_1.setGDO0(CC1101_1_GDO0);
+      cc1101_driver_1.setMHZ(433.92);
+      delay(5);
+
+      // ── Verify: PARTNUM + write/readback test ───────────────────────────
+      byte pn  = cc1101_driver_1.SpiReadStatus(0x30); // PARTNUM: always 0x00
+      byte ver = cc1101_driver_1.SpiReadStatus(0x31); // VERSION: 0x14 genuine
+
+      // CHANNR (0x0A) is a writable config register; writing 0x42 and reading
+      // it back is the definitive proof that both MOSI and MISO are functional.
+      cc1101_driver_1.SpiWriteReg(0x0A, 0x42);
+      byte rb     = cc1101_driver_1.SpiReadReg(0x0A);
+      bool spiOk  = (rb == 0x42);
+      bool chipOk = (pn == 0x00 && ver != 0x00 && ver != 0xFF);
+
+      Serial.printf("[CC1101_1 init #%d] PARTNUM=0x%02X VER=0x%02X chip=%s | w=0x42 r=0x%02X spi=%s\n",
+                    attempt, pn, ver, chipOk ? "OK" : "FAIL", rb, spiOk ? "OK" : "FAIL");
+
+      if (chipOk && spiOk) {
+        initOk = true;
+        radioOk_cc1101_1 = true;
+        cc1101_driver_1.SpiWriteReg(0x0A, 0x00); // restore CHANNR default
+        Serial.printf("[CC1101_1 init] SUCCESS on attempt %d\n", attempt);
+      } else {
+        if (!chipOk) Serial.println("[CC1101_1 init] bad PARTNUM/VER — chip not detected on SPI bus");
+        if (!spiOk)  Serial.println("[CC1101_1 init] write/readback mismatch — MOSI or MISO wiring issue");
+      }
+    }
+    if (!initOk) {
+      radioOk_cc1101_1 = false;
+      Serial.println("[CC1101_1 init] ALL ATTEMPTS FAILED");
+      Serial.println("[CC1101_1 init] Check: VCC=3.3V on CC1101_1, SCK=GPIO12, MISO=GPIO13, MOSI=GPIO11, CS=GPIO14");
+    }
+  }
+  delay(10); // yield to WDT
 
   // Init CC1101 #2 — uses its own HSPI (SPI3) bus so it cannot conflict with driver_1's FSPI
   Serial.println("deviceSetup: initializing CC1101 #2");
@@ -777,6 +861,70 @@ void deviceSetup() {
   //deactivateNRF2(); // nRF2 disabled
   deactivateCC1101();
   deactivateLoRa();
+
+  // ── Side-by-side RSSI sanity check at a common frequency ──
+  // Puts both radios in OOK RX on 433.92 MHz for 5 ms and reads RSSI.
+  // If CC1101_1 reports the exact same constant while CC1101_2 varies this
+  // confirms CC1101_1's SPI writes (setMHZ / SpiStrobe) are not reaching the chip.
+  Serial.println("deviceSetup: CC1101 RSSI sanity check at 433.92 MHz OOK");
+  {
+    // CC1101 #1
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_1.setModulation(2); // OOK
+    cc1101_driver_1.setMHZ(433.92);
+    cc1101_driver_1.SpiStrobe(CC1101_SRX);
+    delay(5);
+    byte r1a = cc1101_driver_1.SpiReadStatus(0x34); // RSSI
+    byte m1  = cc1101_driver_1.SpiReadStatus(0x35) & 0x1F; // MARCSTATE
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_1.SpiStrobe(CC1101_SRX);
+    delay(5);
+    byte r1b = cc1101_driver_1.SpiReadStatus(0x34); // second reading
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    int dbm1a = (r1a >= 128) ? ((int)r1a - 256)/2 - 74 : (int)r1a/2 - 74;
+    int dbm1b = (r1b >= 128) ? ((int)r1b - 256)/2 - 74 : (int)r1b/2 - 74;
+    Serial.printf("[SanityCheck] CC1101_1: MARCSTATE=0x%02X rssi1=0x%02X(%d dBm) rssi2=0x%02X(%d dBm) %s\n",
+                  m1, r1a, dbm1a, r1b, dbm1b,
+                  (r1a == r1b) ? "STUCK (possible SPI write failure)" : "varying (good)");
+
+    // CC1101 #2
+    cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_2.setModulation(2);
+    cc1101_driver_2.setMHZ(433.92);
+    cc1101_driver_2.SpiStrobe(CC1101_SRX);
+    delay(5);
+    byte r2a = cc1101_driver_2.SpiReadStatus(0x34);
+    byte m2  = cc1101_driver_2.SpiReadStatus(0x35) & 0x1F;
+    cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_2.SpiStrobe(CC1101_SRX);
+    delay(5);
+    byte r2b = cc1101_driver_2.SpiReadStatus(0x34);
+    cc1101_driver_2.SpiStrobe(CC1101_SIDLE);
+    int dbm2a = (r2a >= 128) ? ((int)r2a - 256)/2 - 74 : (int)r2a/2 - 74;
+    int dbm2b = (r2b >= 128) ? ((int)r2b - 256)/2 - 74 : (int)r2b/2 - 74;
+    Serial.printf("[SanityCheck] CC1101_2: MARCSTATE=0x%02X rssi1=0x%02X(%d dBm) rssi2=0x%02X(%d dBm) %s\n",
+                  m2, r2a, dbm2a, r2b, dbm2b,
+                  (r2a == r2b) ? "STUCK (possible SPI write failure)" : "varying (good)");
+
+    // Frequency-jump test: tune CC1101_1 to two very different frequencies and read RSSI.
+    // If both readings are identical, setMHZ() isn't working (SPI writes failing).
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_1.setMHZ(400.0);
+    cc1101_driver_1.SpiStrobe(CC1101_SRX);
+    delay(5);
+    byte rLow = cc1101_driver_1.SpiReadStatus(0x34);
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    cc1101_driver_1.setMHZ(470.0);
+    cc1101_driver_1.SpiStrobe(CC1101_SRX);
+    delay(5);
+    byte rHigh = cc1101_driver_1.SpiReadStatus(0x34);
+    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    Serial.printf("[SanityCheck] CC1101_1 freq-jump: 400MHz=0x%02X 470MHz=0x%02X — %s\n",
+                  rLow, rHigh,
+                  (rLow == rHigh)
+                    ? "SAME VALUE — setMHZ() has no effect; SPI writes not reaching chip"
+                    : "different — frequency tuning works");
+  }
 
   Serial.println("deviceSetup: radios initialized");
   delay(10); // yield to WDT

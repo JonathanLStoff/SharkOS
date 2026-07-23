@@ -2,165 +2,527 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="screen-orientation" content="landscape" />
     <title>SharkOS</title>
     <style>
-      /* Theme mapped from Rust/egui theme constants */
-      :root{
-        --bg: #0a0a0a;               /* DEFAULT_DARK_COLOR */
-        --bg-panel: #141414;         /* DEFAULT_DARK_COLOR_BG */
-        --text: #ffffff;             /* DEFAULT_DARK_COLOR_TEXT */
-        --muted: #d6daf5;            /* UNHOVERED_DARK_TEXT_COLOR */
-        --accent: #0ea5e9;           /* DEFAULT_DARK_QUATERNARY_COLOR */
-        --danger: #dc2626;           /* DEFAULT_DARK_SECONDARY_COLOR */
-        --tertiary: #8c00ff;         /* DEFAULT_DARK_TERTIARY_COLOR */
-        --quinary: rgba(130,242,255,0.18); /* DEFAULT_DARK_QUINARY_COLOR */
-        --senary: rgba(216,139,255,0.18);  /* DEFAULT_DARK_SENARY_COLOR */
-        --quinary-darker: #244245;  /* DEFAULT_DARK_QUINARY_COLOR_DARKER */
-        --senary-darker: #3d2847;    /* DEFAULT_DARK_SENARY_COLOR_DARKER */
-        --light: #f5f5f5;            /* DEFAULT_LIGHT_COLOR */
-        --light-secondary: #dc2626;  /* DEFAULT_LIGHT_SECONDARY_COLOR */
-        --glass: rgba(255,255,255,0.03);
-        --card: #15181a;
-        --success: #39ff9b;
-        font-family: 'SpaceGrotesk', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      /* ═══════════════════════════════════════════════
+         SharkOS · VSCode High Contrast Theme
+         ═══════════════════════════════════════════════ */
+
+      /* ── Design tokens ── */
+      :root {
+        /* Surfaces */
+        --bg:          #000000;
+        --bg-1:        #0d0d0d;
+        --bg-2:        #161616;
+        --bg-hover:    #1f1f1f;
+        --bg-sel:      #0e2a40;
+
+        /* Text */
+        --text:        #d4d4d4;
+        --text-hi:     #ffffff;
+        --muted:       #6e6e6e;
+        --muted-hi:    #9d9d9d;
+
+        /* Borders */
+        --bdr:         #3c3c3c;
+        --bdr-hi:      #6fc3df;
+        --bdr-focus:   #ffff00;
+
+        /* VSCode syntax palette */
+        --accent:      #4fc1ff;
+        --accent-dim:  #1575b4;
+        --success:     #4ec9b0;
+        --warning:     #dcdcaa;
+        --danger:      #f44747;
+        --string:      #ce9178;
+        --tertiary:    #c586c0;
+        --comment:     #6a9955;
+
+        /* Legacy aliases — keeps inline-style vars working */
+        --bg-panel:    #0d0d0d;
+        --card:        #0d0d0d;
+        --quinary:     rgba(79,193,255,0.09);
+        --senary:      rgba(197,134,192,0.09);
+        --quinary-darker: #071520;
+        --senary-darker:  #150a1e;
+        --light:         #f5f5f5;
+        --light-secondary:#f44747;
+        --glass:         rgba(255,255,255,0.02);
+
+        font-family: 'Cascadia Code','Consolas','Courier New',monospace;
       }
 
-      *,*::before,*::after{box-sizing:border-box}
-      html,body{height:100%;margin:0;padding:0;overflow:hidden;background:var(--bg);color:var(--text)}
-      /* constrain app to viewport so chart pages fit the device */
-      .app{height:100vh;width:100vw;max-width:100vw;max-height:100vh;margin:0;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border-radius:0;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;}
-      header{flex:0 0 auto}
-      header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-      header h1{margin:0;font-size:20px;color:var(--accent)}
-      .toolbar{margin-left:auto;display:flex;gap:8px}
-      .btn{border:1px solid rgba(255,255,255,0.06);background:var(--card);color:var(--text);padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
-      .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
-      /* disabled / playing states */
-      .btn[disabled]{opacity:.45;cursor:default;filter:grayscale(.2)}
-      .btn.playing{background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(0,0,0,0.04));border:1px solid rgba(0,0,0,0.2);}
-      #recordBtn.recording{color:#ff4d4d;box-shadow:0 6px 20px rgba(255,77,77,0.08)}
-
-      /* Main menu grid (2 x 8) */
-      #main-menu{display:grid;grid-template-columns:repeat(2,1fr);grid-auto-rows:56px;gap:12px}
-      .menu-btn{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--bg-panel),rgba(255,255,255,0.01));border-radius:10px;border:1px solid rgba(255,255,255,0.03);color:var(--text);font-weight:700;font-size:14px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,0.02)}
-      .menu-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,0,0,0.5)}
-      .menu-btn.selected{background:linear-gradient(180deg,var(--quinary),transparent);border-color:var(--quinary-darker);box-shadow:0 10px 30px rgba(0,0,0,0.6);outline:2px solid rgba(255,255,255,0.02)}
-      .menu-grid-title{color:var(--muted);font-size:12px;margin-bottom:0}
-
-      /* Chart / templates */
-      #chart-screen{display:flex;flex:1;gap:12px;min-height:0;overflow:hidden}
-      .panels{background:var(--bg-panel);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.03);box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden}
-      .chart-main{flex:2;min-width:0;min-height:0}
-      .log-panel{flex:1;min-width:0;min-height:0}
-      /* Chart.js needs a position:relative wrapper with bounded height to size correctly */
-      .chart-canvas{display:block;background:transparent;width:100% !important;height:100% !important}
-      .chart-inner{position:relative;width:100%;height:100%;flex:1;min-height:260px}
-      .zoom-container{overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column}
-      .zoomable-container canvas{transform-origin:center center}
-      #cell-scan-output{flex:1;min-height:0;overflow:auto;font-family:monospace;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
-      .small-ctrl{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);cursor:pointer;margin:0 6px;font-weight:700}
-      .hidden{display:none}
-
-      /* Submenu styling (use accent colors for visual hints) */
-      .submenu {display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-      .submenu .menu-btn{padding:12px 8px;font-size:13px;border:1px solid rgba(255,255,255,0.04)}
-      .submenu.ble .menu-btn{border-color:var(--tertiary)}
-      .submenu.wifi .menu-btn{border-color:var(--danger)}
-
-      /* Responsive */
-      @media(max-width:900px){#chart-screen{flex-direction:column} .chart-main,.log-panel{flex:1}} 
-      /* Ensure chart-screen children can shrink inside flex container */
-      #chart-screen{min-height:0}
-      .panels{overflow:hidden}
-
-      /* Menus and submenus should scroll as full-page lists */
-      #main-menu, .submenu, #wifi-menu, #ble-menu, #sub-ghz-menu, #sub-ghz-disruptor, #sub-ghz-smart-disruptor, #settings-menu { overflow-y:auto; flex:1; min-height:0; }
-      /* Settings form inputs */
-      .settings-input{width:100%;padding:7px 10px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:var(--text);font-size:13px;box-sizing:border-box}
-      .settings-card{background:var(--bg-panel);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,0.05);margin-bottom:12px}
-      .settings-card h4{margin:0 0 12px;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em}
-      .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-      .settings-grid .full{grid-column:1/-1}
-      .settings-label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:12px}
-      .settings-row{display:flex;gap:8px;align-items:center;margin-top:10px}
-      .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--muted)}
-      .status-dot.ok{background:#22c55e}
-      .status-dot.err{background:#ef4444}
-
-      /* Device picker modal */
-      #device-picker-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px}
-      #device-picker{
-        width:720px;
-        max-width:calc(100% - 48px);
-        min-height:220px;
-        background:var(--bg-panel);
-        border-radius:12px;
-        padding:20px;
-        box-sizing:border-box;
-        border:1px solid rgba(255,255,255,0.04);
-        box-shadow:0 8px 40px rgba(0,0,0,0.6);
-      }
-      #device-picker select{
-        width:100%;
-        padding:10px;
-        min-height:46px;
-        border-radius:8px;
-        background:transparent;
-        border:1px solid rgba(255,255,255,0.04);
-        color:var(--text);
-        font-weight:600;
-        white-space:nowrap; /* prevent wrapping inside select */
+      /* ── Reset ── */
+      *,*::before,*::after { box-sizing:border-box; }
+      html,body {
+        height:100%; margin:0; padding:0;
         overflow:hidden;
-        text-overflow:ellipsis;
+        background:var(--bg);
+        color:var(--text);
+        -webkit-tap-highlight-color:transparent;
+        touch-action:manipulation;
       }
-      #device-picker .btn{min-width:120px}
+
+      /* ── App shell — safe-area aware ── */
+      .app {
+        /* Dynamic viewport height accounts for Android soft-nav bar appearing/disappearing */
+        height: 100vh;
+        height: 100dvh;
+        width: 100vw;
+        max-width: 100vw;
+        max-height: 100dvh;
+        margin: 0;
+        /* Safe-area insets keep content away from notches, punch-holes, status bars.
+           Fallback values give a minimum breathing room on devices that don't expose them. */
+        padding-top:    env(safe-area-inset-top,    0px);
+        padding-right:  env(safe-area-inset-right,  0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        padding-left:   env(safe-area-inset-left,   0px);
+        box-sizing: border-box;
+        background: var(--bg);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ── Title bar ── */
+      header {
+        flex: 0 0 auto;
+        display: flex; align-items: center; gap: 4px;
+        height: 42px; min-height: 42px;
+        /* Horizontal padding: minimum 12px each side so controls never clip on any device */
+        padding: 0 max(12px, env(safe-area-inset-right, 12px)) 0 max(12px, env(safe-area-inset-left, 12px));
+        background: var(--bg-1);
+        border-bottom: 1px solid var(--bdr);
+      }
+      header h1 {
+        margin:0 0 0 6px;
+        font-size:11px; font-weight:400;
+        color:var(--muted-hi);
+        letter-spacing:0.1em;
+        text-transform:uppercase;
+      }
+      .toolbar { margin-left:auto; display:flex; gap:3px; align-items:center; }
+
+      /* ── Buttons ── */
+      .btn {
+        background:var(--bg-2);
+        border:1px solid var(--bdr);
+        color:var(--text);
+        padding:0 10px;
+        height:26px; min-height:26px;
+        border-radius:0;
+        cursor:pointer;
+        font-family:inherit; font-size:11px; font-weight:400;
+        letter-spacing:0.03em;
+        touch-action:manipulation;
+        display:inline-flex; align-items:center; justify-content:center; gap:4px;
+        transition:border-color .06s,background .06s,color .06s;
+        white-space:nowrap; user-select:none;
+      }
+      .btn:hover:not([disabled]) {
+        background:var(--bg-hover);
+        border-color:var(--bdr-hi);
+        color:var(--text-hi);
+      }
+      .btn:focus-visible { outline:1px solid var(--bdr-focus); outline-offset:0; }
+      .btn:active:not([disabled]) { background:var(--bg-sel); border-color:var(--accent-dim); }
+      .btn.secondary { background:transparent; border-color:var(--bdr); color:var(--muted-hi); }
+      .btn.secondary:hover:not([disabled]) { border-color:var(--bdr-hi); color:var(--text-hi); }
+      .btn[disabled] { opacity:.35; cursor:default; }
+      .btn.playing { border-color:var(--accent-dim); color:var(--accent); }
+      #recordBtn.recording { border-color:var(--danger); color:var(--danger); background:rgba(244,71,71,0.07); }
+
+      /* ── Touch targets on coarse pointers ── */
+      @media(pointer:coarse) {
+        .btn { height:40px; min-height:40px; padding:0 14px; font-size:12px; }
+        header { height:46px; min-height:46px; }
+        .menu-btn { min-height:48px; }
+      }
+
+      /* ── Main menu grid ── */
+      #main-menu {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        grid-auto-rows: 1fr; /* rows fill available height evenly per page */
+        gap: 1px;
+        padding: 1px max(1px, env(safe-area-inset-right, 1px))
+                    1px max(1px, env(safe-area-inset-left,  1px));
+        background: var(--bdr);
+        flex: 1; min-height: 0;
+        overflow: hidden; /* pagination — no scroll */
+      }
+      .menu-btn {
+        display:flex; align-items:center; justify-content:flex-start;
+        padding:0 14px;
+        background:var(--bg-1);
+        border:none; border-left:2px solid transparent;
+        color:var(--muted-hi);
+        font-family:inherit; font-size:11px; font-weight:400;
+        letter-spacing:0.05em; text-transform:uppercase;
+        cursor:pointer; outline:none;
+        transition:background .06s,border-color .06s,color .06s;
+      }
+      .menu-btn:hover {
+        background:var(--bg-hover);
+        border-left-color:var(--accent);
+        color:var(--text-hi);
+      }
+      .menu-btn.selected, .menu-btn:focus-visible {
+        background:var(--bg-sel);
+        border-left-color:var(--accent);
+        color:var(--text-hi); outline:none;
+      }
+      .menu-grid-title {
+        color:var(--muted); font-size:10px;
+        text-transform:uppercase; letter-spacing:0.12em;
+        padding:6px 4px 2px; margin:0;
+      }
+
+      /* Section titles (added inline in HTML) */
+      .vsc-section-title {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 10px; font-weight: 700;
+        letter-spacing: 0.12em; text-transform: uppercase;
+        color: var(--muted);
+        /* Safe horizontal padding so text never clips at screen edge */
+        padding: 8px max(12px, env(safe-area-inset-right, 12px)) 6px max(12px, env(safe-area-inset-left, 12px));
+        border-bottom: 1px solid var(--bdr);
+        user-select: none;
+        background: var(--bg-1);
+      }
+      .vsc-section-title::before { content:'▸'; font-size:9px; }
+
+      /* ── Submenus ── */
+      .submenu {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1px;
+        padding: 1px max(1px, env(safe-area-inset-right, 1px))
+                    1px max(1px, env(safe-area-inset-left,  1px));
+        background: var(--bdr);
+        flex: 1; min-height: 0; overflow-y: auto;
+      }
+      .submenu .menu-btn { font-size:11px; min-height:44px; }
+      .submenu.ble  .menu-btn:hover { border-left-color:var(--tertiary); }
+      .submenu.wifi .menu-btn:hover { border-left-color:var(--danger); }
+
+      /* Section containers */
+      .submenu,
+      #wifi-menu, #ble-menu, #sub-ghz-menu,
+      #sub-ghz-disruptor, #sub-ghz-smart-disruptor,
+      #settings-menu { overflow-y: auto; flex: 1; min-height: 0; }
+      /* #main-menu keeps overflow:hidden (pagination) */
+
+      /* ── Menu pagination bar ── */
+      #menu-pager-bar {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        background: var(--bg-1);
+        border-bottom: 1px solid var(--bdr);
+        padding-right: max(8px, env(safe-area-inset-right, 8px));
+        padding-left:  max(12px, env(safe-area-inset-left, 12px));
+      }
+      #menu-pager-bar .vsc-section-title {
+        border-bottom: none;
+        padding-left: 0;
+        padding-right: 8px;
+      }
+      .menu-pager-btn {
+        background: transparent;
+        border: 1px solid var(--bdr);
+        color: var(--muted-hi);
+        width: 32px; height: 30px;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 11px;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: manipulation;
+        flex-shrink: 0;
+      }
+      .menu-pager-btn:hover:not([disabled]) { border-color: var(--bdr-hi); color: var(--text-hi); }
+      .menu-pager-btn[disabled] { opacity: 0.28; cursor: default; }
+      #menu-page-label {
+        font-size: 10px;
+        color: var(--muted);
+        min-width: 36px;
+        text-align: center;
+        padding: 0 4px;
+        user-select: none;
+      }
+      /* Page dot strip */
+      #menu-dots {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+        padding: 7px max(12px, env(safe-area-inset-right, 12px))
+                    max(7px, env(safe-area-inset-bottom, 7px))
+                    max(12px, env(safe-area-inset-left, 12px));
+        background: var(--bg-1);
+        border-top: 1px solid var(--bdr);
+        flex-shrink: 0;
+      }
+      .menu-dot {
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        border: 1px solid var(--bdr);
+        background: transparent;
+        cursor: pointer;
+        padding: 0;
+        /* larger touch target */
+        position: relative;
+        flex-shrink: 0;
+      }
+      .menu-dot::after {
+        content: '';
+        position: absolute;
+        inset: -8px;
+      }
+      .menu-dot.active { background: var(--accent); border-color: var(--accent); }
+      .menu-dot:hover:not(.active) { border-color: var(--muted); }
+
+      /* ── Chart / split-pane screen ── */
+      #chart-screen {
+        display:flex; flex:1;
+        gap:0; min-height:0; overflow:hidden;
+      }
+      .panels {
+        background:var(--bg-1);
+        border-right:1px solid var(--bdr);
+        padding:8px;
+        box-sizing:border-box;
+        display:flex; flex-direction:column;
+        min-height:0; overflow:hidden;
+      }
+      .panels:last-of-type { border-right:none; }
+      .chart-main        { flex:2; min-width:0; min-height:0; }
+      .log-panel         { flex:1; min-width:0; min-height:0; }
+      .sniffer-mid-panel { flex:1.5; min-width:0; min-height:0; display:none; }
+
+      .chart-canvas { display:block; width:100% !important; height:100% !important; }
+      .chart-inner  { position:relative; width:100%; height:100%; flex:1; min-height:200px; }
+      .zoom-container { overflow:auto; flex:1; min-height:0; display:flex; flex-direction:column; }
+      .zoomable-container canvas { transform-origin:center center; }
+
+      /* ── Cell scan output ── */
+      #cell-scan-output {
+        flex:1; min-height:0; overflow:auto;
+        font-family:inherit;
+        background:var(--bg); padding:8px;
+        border:1px solid var(--bdr);
+        color:var(--success); font-size:11px; line-height:1.6;
+      }
+
+      /* ── Small controls ── */
+      .small-ctrl {
+        display:inline-flex; align-items:center; justify-content:center;
+        width:26px; height:26px;
+        border:1px solid var(--bdr); background:transparent;
+        color:var(--text); cursor:pointer; margin:0 3px;
+        font-weight:700; font-size:12px; border-radius:0;
+      }
+      .small-ctrl:hover { border-color:var(--bdr-hi); color:var(--text-hi); }
+
+      /* ── Misc ── */
+      .hidden { display:none !important; }
+      [hidden] { display:none !important; }
+      section { min-height:0; }
+
+      /* ── Status dots ── */
+      .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; background:var(--muted); }
+      .status-dot.ok  { background:var(--success); }
+      .status-dot.err { background:var(--danger); }
+
+      /* ── Device picker modal ── */
+      #device-picker-overlay {
+        position:fixed; inset:0;
+        background:rgba(0,0,0,0.78);
+        display:flex; align-items:center; justify-content:center;
+        z-index:1000; padding:20px;
+      }
+      #device-picker {
+        width:560px; max-width:calc(100% - 32px);
+        background:var(--bg-1);
+        border:1px solid var(--bdr-hi);
+        padding:18px; box-sizing:border-box;
+      }
+      #device-picker h3 {
+        margin:0 0 12px; font-size:11px; font-weight:400;
+        color:var(--muted-hi); text-transform:uppercase; letter-spacing:0.1em;
+      }
+      #device-picker select {
+        width:100%; padding:6px 8px;
+        background:var(--bg); border:1px solid var(--bdr);
+        color:var(--text); font-family:inherit; font-size:12px;
+        min-height:32px; border-radius:0;
+      }
+      #device-picker .btn { min-width:80px; }
       @media(max-width:640px){
-        #device-picker{width:calc(100% - 32px);max-height:calc(100% - 48px);overflow:auto;padding:16px}
+        #device-picker { width:100%; max-height:80vh; overflow:auto; padding:12px; }
       }
 
-      [hidden] {
-        display: none !important;
+      /* ── Global input / select / textarea overrides ── */
+      /* Ensures all inline-styled controls get the VSCode HC look */
+      input[type="number"],input[type="text"],input[type="password"],input[type="email"],
+      select,textarea {
+        background:var(--bg) !important;
+        border:1px solid var(--bdr) !important;
+        color:var(--text) !important;
+        font-family:inherit !important;
+        font-size:12px !important;
+        border-radius:0 !important;
+        padding:4px 6px !important;
+        outline:none !important;
+        box-sizing:border-box !important;
       }
-      section{min-height:0}
+      input:focus,select:focus,textarea:focus {
+        border-color:var(--bdr-hi) !important;
+        outline:1px solid var(--bdr-focus) !important;
+        outline-offset:-1px !important;
+      }
+      input[type="checkbox"] {
+        accent-color:var(--accent) !important;
+        width:14px !important; height:14px !important;
+        border-radius:0 !important; padding:0 !important;
+      }
+      select option { background:var(--bg-1); color:var(--text); }
+      label { color:var(--muted-hi); font-size:11px; }
 
-      /* Disruptor status bubbles */
-      .disruptor-bubble{padding:10px 16px;border-radius:10px;font-weight:700;font-size:14px;text-align:center;margin-bottom:8px}
-      .disruptor-bubble.active{background:rgba(34,197,94,0.15);border:1px solid #22c55e;color:#22c55e}
-      .disruptor-bubble.inactive{background:rgba(239,68,68,0.15);border:1px solid #ef4444;color:#ef4444}
-      .disruptor-card{background:var(--bg-panel);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,0.04);margin-bottom:12px}
-      .disruptor-card.greyed-out{opacity:0.35;pointer-events:none}
-      .power-selector{display:flex;gap:6px;margin-top:8px}
-      .power-btn{flex:1;padding:8px 4px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:var(--muted);font-weight:700;font-size:13px;cursor:pointer;text-align:center;transition:all .15s}
-      .power-btn.selected{background:var(--accent);color:#fff;border-color:var(--accent)}
-      .power-btn:hover:not(.selected){background:rgba(255,255,255,0.04)}
-      #recorder-table tr[data-sniffer-row-id]{cursor:pointer}
-      #recorder-table tr.selected{background:rgba(14,165,233,0.14)}
-      #recorder-table tr:hover{background:rgba(255,255,255,0.04)}
-      .sniffer-detail-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-      .sniffer-detail-meta{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:12px}
-      .sniffer-detail-meta strong{color:var(--text)}
-      .sniffer-mode-switch{display:flex;gap:6px;flex-wrap:wrap}
-      .sniffer-mode-switch .btn.selected{background:var(--accent);border-color:var(--accent);color:#fff}
-      .sniffer-detail-output{flex:1;min-height:0;overflow:auto;margin:0;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);color:var(--success);font-family:monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+      /* ── Settings ── */
+      .settings-input {
+        width:100%; padding:5px 8px;
+        border:1px solid var(--bdr);
+        background:var(--bg); color:var(--text);
+        font-family:inherit; font-size:12px;
+        border-radius:0; box-sizing:border-box;
+      }
+      .settings-input:focus { border-color:var(--bdr-hi); outline:1px solid var(--bdr-focus); outline-offset:-1px; }
+      .settings-card {
+        background:var(--bg); border:1px solid var(--bdr);
+        padding:12px; margin-bottom:8px;
+      }
+      .settings-card h4 {
+        margin:0 0 10px; font-size:10px; font-weight:400;
+        color:var(--muted); text-transform:uppercase; letter-spacing:0.1em;
+        border-bottom:1px solid var(--bdr); padding-bottom:6px;
+      }
+      .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+      .settings-grid .full { grid-column:1/-1; }
+      .settings-label { display:flex; flex-direction:column; gap:3px; color:var(--muted); font-size:11px; }
+      .settings-row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+
+      /* ── Disruptor ── */
+      .disruptor-bubble {
+        padding:6px 10px; font-size:11px; font-weight:700;
+        text-align:center; margin-bottom:6px;
+        letter-spacing:0.06em; text-transform:uppercase; border-radius:0;
+      }
+      .disruptor-bubble.active   { background:rgba(78,201,176,0.07); border:1px solid var(--success); color:var(--success); }
+      .disruptor-bubble.inactive { background:rgba(244,71,71,0.06);  border:1px solid var(--danger);  color:var(--danger);  }
+      .disruptor-card { background:var(--bg); border:1px solid var(--bdr); padding:10px; margin-bottom:8px; }
+      .disruptor-card.greyed-out { opacity:.3; pointer-events:none; }
+      .power-selector { display:flex; gap:1px; margin-top:6px; background:var(--bdr); }
+      .power-btn {
+        flex:1; padding:5px 2px;
+        border:none; background:var(--bg-2);
+        color:var(--muted); font-family:inherit; font-size:10px;
+        font-weight:700; cursor:pointer;
+        text-transform:uppercase; letter-spacing:0.06em;
+      }
+      .power-btn.selected { background:var(--accent-dim); color:var(--text-hi); }
+      .power-btn:hover:not(.selected) { background:var(--bg-hover); color:var(--text); }
+
+      /* ── Packet recorder table ── */
+      #recorder-table { width:100%; border-collapse:collapse; font-size:11px; }
+      #recorder-table th,#recorder-table td {
+        padding:2px 5px;
+        border-bottom:1px solid var(--bdr);
+        text-align:left; white-space:nowrap;
+        font-family:inherit;
+      }
+      #recorder-table th {
+        color:var(--muted); font-size:9px; font-weight:400;
+        text-transform:uppercase; letter-spacing:0.08em;
+        background:var(--bg); position:sticky; top:0; z-index:1;
+        border-bottom-color:var(--bdr-hi);
+      }
+      #recorder-table tr[data-sniffer-row-id] { cursor:pointer; }
+      #recorder-table tr.selected { background:var(--bg-sel) !important; }
+      #recorder-table tr:hover { background:var(--bg-hover); }
+
+      /* ── Sniffer detail panel ── */
+      .sniffer-detail-toolbar {
+        display:flex; align-items:center;
+        justify-content:space-between; gap:6px;
+        flex-wrap:wrap; margin-bottom:8px;
+        padding-bottom:6px; border-bottom:1px solid var(--bdr);
+      }
+      .sniffer-detail-meta { display:flex; gap:10px; flex-wrap:wrap; color:var(--muted); font-size:11px; }
+      .sniffer-detail-meta strong { color:var(--text-hi); font-weight:400; }
+      .sniffer-mode-switch { display:flex; gap:1px; background:var(--bdr); }
+      .sniffer-mode-switch .btn {
+        border:none; background:var(--bg-2); color:var(--muted-hi);
+        height:24px; padding:0 10px; font-size:11px;
+      }
+      .sniffer-mode-switch .btn.selected { background:var(--accent-dim); color:var(--text-hi); border:none; }
+      .sniffer-mode-switch .btn:hover:not(.selected) { background:var(--bg-hover); color:var(--text-hi); }
+      .sniffer-detail-output {
+        flex:1; min-height:0; overflow:auto;
+        margin:0; padding:10px;
+        border:1px solid var(--bdr); background:var(--bg);
+        color:var(--success); font-family:inherit;
+        font-size:11px; line-height:1.6;
+        white-space:pre-wrap; word-break:break-word;
+      }
+
+      /* ── Scrollbars ── */
+      ::-webkit-scrollbar { width:5px; height:5px; }
+      ::-webkit-scrollbar-track { background:var(--bg); }
+      ::-webkit-scrollbar-thumb { background:var(--bdr); }
+      ::-webkit-scrollbar-thumb:hover { background:var(--muted); }
+      * { scrollbar-width:thin; scrollbar-color:var(--bdr) var(--bg); }
+
+      /* ── Responsive ── */
+      #chart-screen { min-height:0; }
+      .panels { overflow:hidden; }
+      @media(max-width:900px) {
+        #chart-screen { flex-direction:column; }
+        .chart-main,.log-panel,.sniffer-mid-panel { flex:1; }
+      }
+      @media(max-width:600px) {
+        /* portrait phone: single column with taller rows */
+        #main-menu { grid-template-columns:1fr; }
+        .submenu   { grid-template-columns:1fr; }
+        header h1  { display:none; }
+      }
+      @media(min-width:1400px) {
+        /* large tablet landscape: 4-column menu */
+        #main-menu { grid-template-columns:repeat(4,1fr); }
+      }
     </style>
   </head>
   <body>
     <div class="app">
       <header>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button id="backBtn" class="btn secondary">◀ Back</button>
+        <div style="display:flex;gap:3px;align-items:center">
+          <button id="backBtn" class="btn secondary">◀</button>
           <button id="recordBtn" class="btn" title="Record">●</button>
           <button id="playBtn" class="btn" title="Play">▶</button>
           <button id="stopBtn" class="btn" title="Stop">■</button>
         </div>
-        <!-- sub‑GHz header controls: moved here so they appear beside play/stop/record -->
-        <div id="subghz-header-controls" style="display:none;flex-direction:column;gap:4px;margin-left:12px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <label style="color:var(--muted);font-size:13px;margin-right:6px">High</label>
-            <input id="subghzFreqInput1" type="number" min="300" max="1000" step="0.1" value="433.0" style="width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700;text-align:center" />
-            <label style="color:var(--muted);font-size:13px;margin-right:6px">MHz</label>
-            <select id="subghzModSelect1" style="padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700">
+        <!-- sub‑GHz header controls -->
+        <div id="subghz-header-controls" style="display:none;flex-direction:column;gap:3px;margin-left:10px">
+          <div style="display:flex;align-items:center;gap:5px">
+            <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Hi</label>
+            <input id="subghzFreqInput1" type="number" min="300" max="1000" step="0.1" value="433.0" style="width:90px;text-align:center" />
+            <label style="font-size:10px;color:var(--muted)">MHz</label>
+            <select id="subghzModSelect1" style="width:90px">
               <option value="OOK">OOK</option>
               <option value="2-FSK">2-FSK</option>
               <option value="4-FSK">4-FSK</option>
@@ -170,11 +532,11 @@
               <option value="LoRa">LoRa</option>
             </select>
           </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <label style="color:var(--muted);font-size:13px;margin-right:6px">Low</label>
-            <input id="subghzFreqInput2" type="number" min="300" max="1000" step="0.1" value="400.0" style="width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700;text-align:center" />
-            <label style="color:var(--muted);font-size:13px;margin-right:6px">MHz</label>
-            <select id="subghzModSelect2" style="padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text);font-weight:700">
+          <div style="display:flex;align-items:center;gap:5px">
+            <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Lo</label>
+            <input id="subghzFreqInput2" type="number" min="300" max="1000" step="0.1" value="400.0" style="width:90px;text-align:center" />
+            <label style="font-size:10px;color:var(--muted)">MHz</label>
+            <select id="subghzModSelect2" style="width:90px">
               <option value="OOK">OOK</option>
               <option value="2-FSK">2-FSK</option>
               <option value="4-FSK">4-FSK</option>
@@ -184,21 +546,21 @@
             </select>
           </div>
         </div>
-        
+
         <!-- Wi-Fi header controls -->
-        <div id="wifi-header-controls" style="display:none;align-items:center;gap:8px;margin-left:12px">
-          <select id="wifiBandSelect" style="padding:4px;border-radius:6px;background:transparent;color:var(--text);border:1px solid rgba(255,255,255,0.1)">
+        <div id="wifi-header-controls" style="display:none;align-items:center;gap:5px;margin-left:10px">
+          <select id="wifiBandSelect" style="width:90px">
             <option value="2.4">2.4 GHz</option>
             <option value="5" hidden>5 GHz</option>
           </select>
-          <select id="wifiChannelSelect" style="padding:4px;border-radius:6px;background:transparent;color:var(--text);border:1px solid rgba(255,255,255,0.1);min-width:60px">
+          <select id="wifiChannelSelect" style="width:100px">
             <option value="all">All Channels</option>
           </select>
         </div>
         <h1>SharkOS</h1>
         <div class="toolbar">
-          <div id="connectedDevice" style="color:var(--muted);font-size:14px">No device connected</div>
-          <button id="requestPermsBtn" class="btn">Choose Device</button>
+          <div id="connectedDevice" style="color:var(--muted);font-size:10px;letter-spacing:.04em">No device connected</div>
+          <button id="requestPermsBtn" class="btn">Connect</button>
         </div>
       </header>
 
@@ -219,11 +581,14 @@
         </div>
       </div>
 
-      <!-- MAIN MENU: 2 x 8 grid of buttons -->
+      <!-- MAIN MENU: 2-column paginated grid -->
+      <div id="menu-pager-bar">
+        <div class="vsc-section-title" style="flex:1;padding:0">SharkOS</div>
+        <button class="menu-pager-btn" id="menuPrevBtn" disabled aria-label="Previous page">◀</button>
+        <span id="menu-page-label">1/1</span>
+        <button class="menu-pager-btn" id="menuNextBtn" aria-label="Next page">▶</button>
+      </div>
       <section id="main-menu" aria-label="main-menu" class="menu active">
-        <div class="menu-grid-title"></div>
-        <div class="menu-grid-title"></div>
-
         <button class="menu-btn" data-action="wifi">Wi‑Fi</button>
         <button class="menu-btn" data-action="ble">BLE</button>
         <button class="menu-btn" data-action="subghz">Sub‑GHz</button>
@@ -242,11 +607,12 @@
         <button class="menu-btn" data-action="settings">Settings</button>
         <button class="menu-btn" data-action="about">About</button>
       </section>
+      <!-- Page dots (JS will populate) -->
+      <div id="menu-dots"></div>
 
       <!-- BLE Submenu -->
       <section id="ble-menu" hidden=true>
-        <div class="menu-grid-title">BLE</div>
-        <div class="menu-grid-title"></div>
+        <div class="vsc-section-title">BLE</div>
         <div class="submenu ble">
           <button class="menu-btn" data-action="ble-scanner">Scanner</button>
           <button class="menu-btn" data-action="ble-packet-sender">Packet Sender</button>
@@ -256,8 +622,7 @@
 
       <!-- Wi‑Fi Submenu -->
       <section id="wifi-menu" hidden=true>
-        <div class="menu-grid-title">Wi‑Fi</div>
-        <div class="menu-grid-title"></div>
+        <div class="vsc-section-title">Wi‑Fi</div>
         <div class="submenu wifi">
             <button class="menu-btn" data-action="wifi-scanner">Scanner</button>
             <button class="menu-btn" data-action="wifi-channel-scan">Channel Scan</button>
@@ -331,8 +696,7 @@
         </div>
       </section>
       <section id="sub-ghz-menu" hidden=true>
-        <div class="menu-grid-title">Sub‑GHz</div>
-        <div class="menu-grid-title"></div>
+        <div class="vsc-section-title">Sub‑GHz</div>
         <div class="submenu sub-ghz">
           <button class="menu-btn" data-action="sub-ghz-scanner">Spectrum Analyzer</button>
           <button class="menu-btn" data-action="sub-ghz-playback">Playback</button>
@@ -347,8 +711,7 @@
       </section>
       <!-- Algorithms submenu for sub-GHz radio analysis / cracking -->
       <section id="sub-ghz-algorithms" hidden=true>
-        <div class="menu-grid-title">RF Algorithms</div>
-        <div class="menu-grid-title"></div>
+        <div class="vsc-section-title">RF Algorithms</div>
         <div class="submenu sub-ghz">
           <button class="menu-btn" data-action="algo-symbol-timing">Symbol Timing</button>
           <button class="menu-btn" data-action="algo-crc-recovery">CRC Recovery</button>
@@ -530,8 +893,8 @@
           <div id="sniffer-detail-panel" class="panels hidden" hidden=true style="flex:1;gap:10px;">
             <div class="sniffer-detail-toolbar">
               <div>
-                <div style="font-size:14px;font-weight:700;color:var(--accent)">Packet Inspector</div>
-                <div id="sniffer-detail-summary" style="font-size:12px;color:var(--muted);margin-top:4px">Tap a received transmission on the right to inspect it here.</div>
+                <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase">▸ Packet Inspector</div>
+                <div id="sniffer-detail-summary" style="font-size:11px;color:var(--muted);margin-top:2px">Select a packet to inspect</div>
               </div>
               <div class="sniffer-mode-switch">
                 <button class="btn secondary selected" data-sniffer-view-mode="hex">Hex</button>
@@ -615,46 +978,71 @@
               </div>
         </div>
 
+        <!-- Middle panel: live packet log (only shown in sniffer mode) -->
+        <aside class="panels sniffer-mid-panel" id="sniffer-mid-panel">
+          <div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bdr)">
+            <span style="color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;flex:1">▸ Packet Log</span>
+            <button id="recorder-clear" class="btn secondary">Clear</button>
+            <button id="recorder-save" class="btn">CSV</button>
+            <button id="recorder-save-db" class="btn" style="border-color:var(--accent-dim);color:var(--accent)">Save All</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <span id="recorder-count" style="color:var(--muted);font-size:10px">0 packets</span>
+            <span id="recorder-size-warn" style="color:var(--string);font-size:10px;display:none">⚠ Storage large</span>
+          </div>
+          <div id="recorder-table-scroll" style="overflow:auto;flex:1;min-height:0">
+            <table id="recorder-table" style="width:100%;border-collapse:collapse;font-size:11px">
+              <thead><tr><th>Time</th><th>Freq</th><th>Mod</th><th>RSSI</th><th>Len</th><th>Data</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </aside>
+
         <aside class="panels log-panel">
           <div id="recorder-controls" style="display:none;flex-direction:column;gap:8px">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <label style="color:var(--muted);font-size:12px">Low
-                <input id="sniffer-freq-low" type="number" value="400" step="0.5" style="width:60px"/>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;padding-bottom:6px;border-bottom:1px solid var(--bdr);margin-bottom:2px">▸ Settings</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <label style="color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:2px">Low MHz
+                <input id="sniffer-freq-low" type="number" value="400" step="0.5" style="width:100%;font-size:14px;padding:6px;min-height:36px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:var(--bg-panel);color:var(--text)"/>
               </label>
-              <label style="color:var(--muted);font-size:12px">High
-                <input id="sniffer-freq-high" type="number" value="433" step="0.5" style="width:60px"/>
+              <label style="color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:2px">High MHz
+                <input id="sniffer-freq-high" type="number" value="433" step="0.5" style="width:100%;font-size:14px;padding:6px;min-height:36px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:var(--bg-panel);color:var(--text)"/>
               </label>
-              <label style="color:var(--muted);font-size:12px">Mod
-                <select id="sniffer-mod" style="font-size:12px">
-                  <option value="OOK" selected>OOK</option>
+              <label style="color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:2px">Mod (Radio 1)
+                <select id="sniffer-mod" style="width:100%;font-size:14px;padding:6px;min-height:36px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:var(--bg-panel);color:var(--text)">
+                  <option value="AUTO" selected>Auto (try all)</option>
+                  <option value="OOK">OOK / ASK</option>
                   <option value="2-FSK">2-FSK</option>
                   <option value="GFSK">GFSK</option>
+                  <option value="MSK">MSK</option>
                   <option value="LoRa">LoRa</option>
+                  <option value="NONE">None (disable radio)</option>
                 </select>
               </label>
-              <label style="color:var(--muted);font-size:12px">RSSI >=
-                <input id="recorder-thresh" type="number" value="-100" step="1" style="width:55px"/>
+              <label style="color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:2px">Mod (Radio 2)
+                <select id="sniffer-mod-two" style="width:100%;font-size:14px;padding:6px;min-height:36px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:var(--bg-panel);color:var(--text)">
+                  <option value="AUTO">Auto (try all)</option>
+                  <option value="OOK">OOK / ASK</option>
+                  <option value="2-FSK" selected>2-FSK</option>
+                  <option value="GFSK">GFSK</option>
+                  <option value="MSK">MSK</option>
+                  <option value="LoRa">LoRa</option>
+                  <option value="NONE">None (disable radio)</option>
+                </select>
               </label>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <button id="recorder-clear" class="btn secondary" style="font-size:11px;padding:4px 8px">Clear</button>
-              <button id="recorder-save" class="btn" style="font-size:11px;padding:4px 8px">Save CSV</button>
-              <button id="recorder-save-db" class="btn" style="font-size:11px;padding:4px 8px;background:#1E88E5">Save All to DB</button>
-              <span id="recorder-count" style="color:var(--muted);font-size:11px">0 packets</span>
-              <span id="recorder-size-warn" style="color:#FF5722;font-size:11px;display:none">&#9888; Storage large</span>
-            </div>
-            <!-- TODO: fix the scrolling to work, it keeps snapping back to the top all the time. -->
-            <div id="recorder-table-scroll" style="overflow:auto;max-height:250px">
-              <table id="recorder-table" style="width:100%;border-collapse:collapse;font-size:11px">
-                <thead><tr><th>Time</th><th>Freq</th><th>Mod</th><th>RSSI</th><th>Len</th><th>Data</th><th></th></tr></thead>
-                <tbody></tbody>
-              </table>
+              <label style="color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:2px">Min RSSI (dBm)
+                <input id="recorder-thresh" type="number" value="" placeholder="none" style="width:100%;font-size:14px;padding:6px;min-height:36px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:var(--bg-panel);color:var(--text)"/>
+              </label>
+              <label style="color:var(--muted);font-size:13px;display:flex;flex-direction:row;align-items:center;gap:6px">
+                <input type="checkbox" id="recorder-hide-empty" checked style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)"/>
+                Hide empty (len=0)
+              </label>
             </div>
           </div>
           <!-- Playback saved signals list -->
           <div id="playback-controls" style="display:none;flex-direction:column;gap:8px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span style="color:var(--accent);font-size:13px;font-weight:600">Saved Signals</span>
+              <span style="color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">▸ Saved Signals</span>
               <button id="playback-refresh" class="btn secondary" style="font-size:11px;padding:4px 8px">Refresh</button>
               <button id="playback-export-csv" class="btn" style="font-size:11px;padding:4px 8px">Export CSV</button>
               <button id="playback-clear-db" class="btn secondary" style="font-size:11px;padding:4px 8px;color:#FF5722">Clear DB</button>
@@ -674,7 +1062,7 @@
       <!-- STATUS SCREEN: show results of status.info queries -->
       <section id="status-screen" style="margin-top:14px" class="hidden" hidden=true>
         <div class="panels" style="flex-direction:column;gap:12px;">
-          <h3 style="margin-top:0;color:var(--muted)">Device Status</h3>
+          <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--bdr);margin-bottom:12px">▸ Device Status</div>
           <div id="status-content" style="display:flex;flex-wrap:wrap;gap:12px;"></div>
         </div>
       </section>

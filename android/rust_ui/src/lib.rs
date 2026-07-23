@@ -297,8 +297,8 @@ fn sniffer_session_append(entries: Vec<recorder_store::SnifferPacketInput>) -> R
 }
 
 #[tauri::command]
-fn sniffer_session_page(offset: i64, limit: i64, min_rssi: i64) -> Result<recorder_store::SnifferPage, String> {
-    recorder_store::page_packets(offset, limit, min_rssi)
+fn sniffer_session_page(offset: i64, limit: i64, min_rssi: i64, min_len: i64) -> Result<recorder_store::SnifferPage, String> {
+    recorder_store::page_packets(offset, limit, min_rssi, min_len)
 }
 
 #[tauri::command]
@@ -312,8 +312,8 @@ fn sniffer_session_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn sniffer_session_export_csv(path: &str, min_rssi: i64) -> Result<recorder_store::SnifferSessionStats, String> {
-    recorder_store::export_packets_csv(path, min_rssi)
+fn sniffer_session_export_csv(path: &str, min_rssi: i64, min_len: i64) -> Result<recorder_store::SnifferSessionStats, String> {
+    recorder_store::export_packets_csv(path, min_rssi, min_len)
 }
 
 #[tauri::command]

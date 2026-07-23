@@ -74,6 +74,13 @@ ELECHOUSE_CC1101::ELECHOUSE_CC1101()
 void ELECHOUSE_CC1101::setSPIBus(SPIClass *bus) {
   _spiBus = bus;
 }
+
+// Call after an external SPI.end() so the next SpiStart() re-attaches the
+// GPIO matrix routing via _spiBus->begin() instead of skipping it (the
+// _spi_initialized guard otherwise assumes the bus is still live).
+void ELECHOUSE_CC1101::resetSpiInit(void) {
+  _spi_initialized = false;
+}
 //                       -30  -20  -15  -10   0    5    7    10
 uint8_t PA_TABLE_315[8] {0x12,0x0D,0x1C,0x34,0x51,0x85,0xCB,0xC2,};             //300 - 348
 uint8_t PA_TABLE_433[8] {0x12,0x0E,0x1D,0x34,0x60,0x84,0xC8,0xC0,};             //387 - 464

@@ -12,6 +12,13 @@
 static const char CMD_BLE_SCAN_START[] = "ble.scan.start";
 static const char CMD_BLE_SCAN_STOP[]  = "ble.scan.stop";
 
+// BLE emulator (advertise/impersonate a target BLE device).
+// params: { name: string, service_uuid: string (optional),
+//           manufacturer: hex-string (optional), mac: "AA:BB:.." (optional),
+//           spoof_mac: bool (optional, default false) }
+static const char CMD_BLE_EMULATE_START[] = "ble.emulate.start";
+static const char CMD_BLE_EMULATE_STOP[]  = "ble.emulate.stop";
+
 // Wi‑Fi scan / sniffer
 static const char CMD_WIFI_SCAN_START[]    = "wifi.scan.start";
 static const char CMD_WIFI_SCAN_STOP[]     = "wifi.scan.stop";
@@ -92,6 +99,8 @@ static const char CMD_DEVICE_STATUS[]        = "device.status"; // radio/device 
 static const char* const SHARKOS_BT_COMMANDS[] = {
     CMD_BLE_SCAN_START,
     CMD_BLE_SCAN_STOP,
+    CMD_BLE_EMULATE_START,
+    CMD_BLE_EMULATE_STOP,
     CMD_WIFI_SCAN_START,
     CMD_WIFI_SCAN_STOP,
     CMD_WIFI_CHANNEL_SCAN,

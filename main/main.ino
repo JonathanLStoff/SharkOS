@@ -132,6 +132,13 @@ static void updateStatusLed() {
     }
   }
 
+  // A WiFi control client connecting counts as "connected" — show steady green,
+  // the same indication as a paired BLE (Android) client.
+  if (g_wifiClientConnected) {
+    setStatusLed(0, 128, 0);
+    return;
+  }
+
   // After first valid command, show steady green to indicate 'active' state
   if (firstCommandReceived) {
     setStatusLed(0, 128, 0);
@@ -183,6 +190,10 @@ void setup() {
   // Initialize BLE command/event subsystem
   events_init();
 
+  // Bring up the hidden WiFi control AP + TCP command server (second control
+  // transport alongside BLE). Runs until a client pairs on either transport.
+  wifiCtrlSetup();
+
   // Boot time reference
   bootMillis = millis();
 
@@ -217,8 +228,10 @@ void loop() {
 
   // After 5 seconds: if device has NEVER been paired, or if it was paired
   // previously but *no client connected* within the timeout, enable pairing
-  // mode so the app can authenticate (PIN-based pairing).
-  if (!pairingMode && (millis() - bootMillis) > 5000) {
+  // mode so the app can authenticate (PIN-based pairing). Skip this entirely
+  // once a WiFi control client owns the device.
+  if (!pairingMode && (millis() - bootMillis) > 5000 &&
+      g_activeTransport != XPORT_WIFI && !g_wifiClientConnected) {
     if (!paired || (paired && !anyConnected)) {
       pairingMode = true;
       Serial.println("Pairing mode enabled (waiting for auth)");
@@ -233,6 +246,9 @@ void loop() {
   if (paired && anyConnected) {
     pollBluetoothCommands();
   }
+
+  // Pump the WiFi control transport (accept client, read command lines)
+  wifiCtrlLoop();
 
   // Process one queued BLE event (non-blocking)
   events_process_one();

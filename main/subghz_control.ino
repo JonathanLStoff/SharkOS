@@ -23,6 +23,7 @@ float sniffer_top_mhz = 433.0f;
 float sniffer_bot_mhz = 400.0f;
 int   sniffer_rssi_threshold = -80;
 String sniffer_modulation = "OOK";
+String sniffer_modulation_two = "2-FSK";
 bool  sniffer_use_lora = false;
 
 void notifyStatus(const char *s) {
@@ -31,6 +32,9 @@ void notifyStatus(const char *s) {
     pStatusChar->setValue(String(s));
     pStatusChar->notify();
   }
+  // Mirror to the WiFi control client when that transport is active (no-op
+  // otherwise), so scan/emulate results reach the Flipper over WiFi too.
+  wifiCtrlSend(s);
 }
 
 void cc1101Read() {
@@ -49,14 +53,12 @@ void cc1101Read() {
 }
 
 // --- CC1101 connectivity checks -------------------------------------------------
-// Check primary / secondary modules
-bool cc1101Connected() { 
-    // Uses SmartRC Driver check
-    return cc1101_driver_1.getCC1101(); 
-}
-bool cc1101_2Connected() { 
-    return cc1101_driver_2.getCC1101(); 
-}
+// Use boot-time health flags (set during deviceSetup SPI reads) rather than
+// getCC1101() which may return a cached true even when SPI is broken.
+extern bool radioOk_cc1101_1;
+extern bool radioOk_cc1101_2;
+bool cc1101Connected()   { return radioOk_cc1101_1; }
+bool cc1101_2Connected() { return radioOk_cc1101_2; }
 
 // Convenience: true only if both modules are present
 bool cc1101BothConnected() { return cc1101Connected() && cc1101_2Connected(); }
@@ -456,92 +458,150 @@ void loraRead() {
 
 // ────────────────────────────────────────────────────────────────
 // cc1101SnifferRead — Packet sniffer for CC1101 radios
-// Sweeps freq range, captures raw FIFO data at frequencies where
-// RSSI exceeds the user-set threshold. Sends JSON `sniffer_packet`
-// objects over BLE for each detection.
+// Supports:
+//   "NONE" — skip this radio entirely
+//   "AUTO" — at each RSSI hit with no data, try every modulation
+//   any specific mod — use only that modulation
+// Only one radio may run in AUTO at a time (first one wins).
 // ────────────────────────────────────────────────────────────────
-void cc1101SnifferRead() {
+
+// All modulations AUTO mode tries in order
+static const char* const AUTO_MODS[] = {"OOK", "2-FSK", "GFSK", "MSK"};
+static const int          AUTO_MODS_COUNT = 4;
+
+static void applySnifferMod(ELECHOUSE_CC1101 &drv, const char* mod) {
+  if (strcmp(mod, "2-FSK") == 0 || strcmp(mod, "FSK") == 0) drv.setModulation(0);
+  else if (strcmp(mod, "GFSK") == 0)                        drv.setModulation(1);
+  else if (strcmp(mod, "MSK")  == 0)                        drv.setModulation(4);
+  else                                                       drv.setModulation(2); // OOK/ASK
+}
+
+// Try to read packet bytes from the FIFO after the radio has had dwell time.
+// Returns number of bytes placed in buf (0 = nothing captured).
+static int tryReadFifo(ELECHOUSE_CC1101 &drv, uint8_t *buf, int bufLen) {
+  byte rxBytes = drv.SpiReadStatus(CC1101_RXBYTES) & 0x7F;
+  if (rxBytes >= 2) {
+    byte len = drv.SpiReadReg(CC1101_RXFIFO);
+    if (len > 0 && len <= (byte)bufLen && len <= (rxBytes - 1)) {
+      drv.SpiReadBurstReg(CC1101_RXFIFO, buf, len);
+      return (int)len;
+    }
+  } else if (rxBytes == 1) {
+    buf[0] = drv.SpiReadReg(CC1101_RXFIFO);
+    return 1;
+  }
+  return 0;
+}
+
+static void cc1101SnifferSweep(ELECHOUSE_CC1101 &drv, int gdo0pin, RadioModule moduleId,
+                                const String &mod, bool allowAuto) {
+  // "NONE" — radio disabled for this sweep
+  if (mod.equalsIgnoreCase("NONE") || mod.length() == 0) return;
+
   extern bool scanningRadio;
   float low  = sniffer_bot_mhz;
   float high = sniffer_top_mhz;
   if (high < low) { float t = low; low = high; high = t; }
-  const float stepMHz = 0.25f; // finer step for sniffer
 
-  // Configure CC1101 for variable-length packet mode, no address filtering
-  cc1101_driver_1.setCCMode(true);
-  cc1101_driver_1.setGDO0(CC1101_1_GDO0);
-  // Set modulation
-  if (sniffer_modulation == "2-FSK" || sniffer_modulation == "FSK") {
-    cc1101_driver_1.setModulation(0);
-  } else if (sniffer_modulation == "GFSK") {
-    cc1101_driver_1.setModulation(1);
-  } else { // OOK/ASK
-    cc1101_driver_1.setModulation(2);
-  }
+  const bool isAuto = mod.equalsIgnoreCase("AUTO") && allowAuto;
+  // Starting modulation: AUTO begins with OOK, specific mod uses itself
+  const char* startMod = isAuto ? "OOK" : mod.c_str();
 
-  for (float f = low; f <= high && scanningRadio; f += stepMHz) {
-    cc1101_driver_1.setMHZ(f);
-    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
-    cc1101_driver_1.SpiStrobe(CC1101_SFRX);
-    cc1101_driver_1.SetRx();
+  drv.setCCMode(true);
+  drv.setGDO0(gdo0pin);
+  applySnifferMod(drv, startMod);
+
+  Serial.printf("[Sniffer] Module=%d sweep start %.2f-%.2f MHz mod=%s (auto=%d)\n",
+                (int)moduleId, low, high, mod.c_str(), (int)isAuto);
+
+  for (float f = low; f <= high && scanningRadio; f += 0.25f) {
+    drv.setMHZ(f);
+    drv.SpiStrobe(CC1101_SIDLE);
+    drv.SpiStrobe(CC1101_SFRX);
+    drv.SetRx();
     delayMicroseconds(600);
 
-    int rssi = cc1101_driver_1.getRssi();
-
-    if (rssi >= sniffer_rssi_threshold) {
-      // Signal above threshold — dwell longer and try to capture FIFO data
-      delay(8); // allow packet to arrive
-
-      byte rxBytes = cc1101_driver_1.SpiReadStatus(CC1101_RXBYTES) & 0x7F;
-      uint8_t packet[64];
-      int pktLen = 0;
-
-      if (rxBytes >= 2) {
-        byte len = cc1101_driver_1.SpiReadReg(CC1101_RXFIFO);
-        if (len > 0 && len <= 64 && len <= (rxBytes - 1)) {
-          cc1101_driver_1.SpiReadBurstReg(CC1101_RXFIFO, packet, len);
-          pktLen = len;
-        }
-      } else if (rxBytes == 1) {
-        // Single byte in FIFO — read it
-        packet[0] = cc1101_driver_1.SpiReadReg(CC1101_RXFIFO);
-        pktLen = 1;
-      }
-
-      // Flush RX FIFO after read attempt
-      cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
-      cc1101_driver_1.SpiStrobe(CC1101_SFRX);
-
-      // Build JSON sniffer_packet
-      JsonDocument doc;
-      JsonObject sp = doc["sniffer_packet"].to<JsonObject>();
-      sp["freq"] = f;
-      sp["rssi"] = rssi;
-      sp["mod"] = sniffer_modulation;
-      sp["module"] = (int)CC1101_1;
-      sp["ts"] = millis();
-      sp["len"] = pktLen;
-
-      if (pktLen > 0) {
-        char hex[129];
-        for (int i = 0; i < pktLen && i < 64; i++) {
-          sprintf(hex + i*2, "%02X", packet[i]);
-        }
-        hex[pktLen * 2] = 0;
-        sp["data"] = hex;
-      } else {
-        sp["data"] = "";
-      }
-
-      String s;
-      serializeJson(doc, s);
-      notifyStatus(s.c_str());
-
-      Serial.printf("[Sniffer] %.2f MHz RSSI=%d len=%d\n", f, rssi, pktLen);
+    int rssi = drv.getRssi();
+    if (rssi < sniffer_rssi_threshold) {
+      drv.SpiStrobe(CC1101_SIDLE);
+      continue;
     }
 
-    cc1101_driver_1.SpiStrobe(CC1101_SIDLE);
+    // Signal above threshold — try to read data
+    delay(8);
+    uint8_t packet[64];
+    int     pktLen = 0;
+    const char* usedMod = startMod;
+
+    pktLen = tryReadFifo(drv, packet, sizeof(packet));
+    drv.SpiStrobe(CC1101_SIDLE);
+    drv.SpiStrobe(CC1101_SFRX);
+
+    // AUTO: if no data with the starting mod, cycle through the others
+    if (isAuto && pktLen == 0) {
+      for (int mi = 0; mi < AUTO_MODS_COUNT && pktLen == 0; mi++) {
+        const char* tryMod = AUTO_MODS[mi];
+        if (strcmp(tryMod, startMod) == 0) continue; // already tried
+
+        applySnifferMod(drv, tryMod);
+        drv.setMHZ(f);
+        drv.SpiStrobe(CC1101_SFRX);
+        drv.SetRx();
+        delay(12); // longer dwell for auto-detect
+
+        pktLen = tryReadFifo(drv, packet, sizeof(packet));
+        drv.SpiStrobe(CC1101_SIDLE);
+        drv.SpiStrobe(CC1101_SFRX);
+
+        if (pktLen > 0) {
+          usedMod = tryMod;
+          Serial.printf("[AutoMod] Module=%d decoded with %s at %.2f MHz RSSI=%d len=%d\n",
+                        (int)moduleId, tryMod, f, rssi, pktLen);
+        }
+      }
+      // Restore starting mod for next frequency step
+      applySnifferMod(drv, startMod);
+    }
+
+    // Report the detection (even if pktLen==0 — RSSI hit is still useful)
+    JsonDocument doc;
+    JsonObject sp = doc["sniffer_packet"].to<JsonObject>();
+    sp["freq"]   = f;
+    sp["rssi"]   = rssi;
+    sp["mod"]    = usedMod;
+    sp["module"] = (int)moduleId;
+    sp["ts"]     = millis();
+    sp["len"]    = pktLen;
+    if (pktLen > 0) {
+      char hex[129];
+      for (int i = 0; i < pktLen && i < 64; i++) sprintf(hex + i*2, "%02X", packet[i]);
+      hex[pktLen * 2] = '\0';
+      sp["data"] = hex;
+    } else {
+      sp["data"] = "";
+    }
+    String s; serializeJson(doc, s);
+    notifyStatus(s.c_str());
+    Serial.printf("[Sniffer] Module=%d mod=%s %.2f MHz RSSI=%d len=%d\n",
+                  (int)moduleId, usedMod, f, rssi, pktLen);
+
+    drv.SpiStrobe(CC1101_SIDLE);
   }
+}
+
+void cc1101SnifferRead() {
+  String mod1 = sniffer_modulation;
+  String mod2 = sniffer_modulation_two;
+
+  // Only the first radio configured as AUTO gets auto mode.
+  // If both are AUTO, Radio 2 falls back to OOK to avoid doubled sweep time.
+  bool radio1Auto = mod1.equalsIgnoreCase("AUTO");
+  bool radio2Auto = mod2.equalsIgnoreCase("AUTO");
+  bool allowAuto1 = radio1Auto;
+  bool allowAuto2 = radio2Auto && !radio1Auto; // Radio 2 auto only if Radio 1 is not
+
+  cc1101SnifferSweep(cc1101_driver_1, CC1101_1_GDO0, CC1101_1, mod1, allowAuto1);
+  cc1101SnifferSweep(cc1101_driver_2, CC1101_2_GDO0, CC1101_2, mod2, allowAuto2);
 }
 
 // ────────────────────────────────────────────────────────────────

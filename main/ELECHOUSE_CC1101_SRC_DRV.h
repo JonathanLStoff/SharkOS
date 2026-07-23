@@ -156,6 +156,7 @@ private:
 public:
   ELECHOUSE_CC1101();                   // constructor — initialises all member state
   void setSPIBus(SPIClass *bus);        // assign a custom SPI peripheral (e.g. HSPI for radio #2)
+  void resetSpiInit(void);              // force the next SpiStart() to re-run _spiBus->begin()
   void Init(void);
   byte SpiReadStatus(byte addr);
   void setSpiPin(byte sck, byte miso, byte mosi, byte ss);
